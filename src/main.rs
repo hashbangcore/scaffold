@@ -1,8 +1,6 @@
 //! scaffold: materialize templates from a local repository (`$SCAFFOLD`).
 
-mod cli;
-mod discovery;
-mod error;
+use scaffold::cli;
 
 fn main() -> std::process::ExitCode {
     match cli::run() {

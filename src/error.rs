@@ -17,6 +17,17 @@ pub enum Error {
     },
     /// The group directory does not exist under the repository root.
     GroupNotFound { group: String },
+    /// The requested template does not exist in the group.
+    TemplateNotFound {
+        group: String,
+        requested: String,
+        available: Vec<String>,
+    },
+    /// The group has several templates and none is named like the group.
+    DefaultTemplateAmbiguous {
+        group: String,
+        available: Vec<String>,
+    },
     /// A code path that clap should have prevented was reached.
     Internal { reason: String },
 }
@@ -46,8 +57,43 @@ impl fmt::Display for Error {
                     "group '{group}' does not exist under the template repository"
                 )
             }
+            Self::TemplateNotFound {
+                group,
+                requested,
+                available,
+            } => write!(
+                f,
+                "template '{requested}' does not exist in group '{group}'; available: {}",
+                fmt_list(available)
+            ),
+            Self::DefaultTemplateAmbiguous { group, available } => write!(
+                f,
+                "group '{group}' has several templates and none is named like the group; choose one with --template; available: {}",
+                fmt_list(available)
+            ),
             Self::Internal { reason } => write!(f, "internal error: {reason}"),
         }
+    }
+}
+
+/// Render non-empty names as `a, b, c`, or `(none)`.
+#[must_use]
+pub fn fmt_list(items: &[String]) -> String {
+    if items.is_empty() {
+        "(none)".to_owned()
+    } else {
+        items.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt_list_renders_names_or_placeholder() {
+        assert_eq!(fmt_list(&[]), "(none)");
+        assert_eq!(fmt_list(&["a".to_owned(), "b".to_owned()]), "a, b");
     }
 }
 

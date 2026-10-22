@@ -60,6 +60,51 @@ pub fn templates(root: &Path, group: &str) -> Result<Vec<String>> {
         .map(|found| found.into_iter().map(|(name, _)| name).collect())
 }
 
+/// A resolved template: its group, its directory, and how it was named.
+#[derive(Debug)]
+pub struct Selected {
+    pub group: String,
+    pub template: String,
+    pub dir: PathBuf,
+}
+
+/// Resolve the template to use, preferring `explicit` over the default rule:
+/// the only subdirectory, or the subdirectory named like the group.
+pub fn select_template(root: &Path, group: &str, explicit: Option<&str>) -> Result<Selected> {
+    let available = templates(root, group)?;
+    let name = match explicit {
+        Some(requested) => {
+            if !available.iter().any(|candidate| candidate == requested) {
+                return Err(Error::TemplateNotFound {
+                    group: group.to_owned(),
+                    requested: requested.to_owned(),
+                    available,
+                });
+            }
+            requested.to_owned()
+        }
+        None => default_template_name(group, &available)?,
+    };
+    Ok(Selected {
+        group: group.to_owned(),
+        template: name.clone(),
+        dir: root.join(group).join(&name),
+    })
+}
+
+fn default_template_name(group: &str, available: &[String]) -> Result<String> {
+    if let [only] = available {
+        return Ok(only.clone());
+    }
+    if let Some(same_name) = available.iter().find(|name| name == &group) {
+        return Ok(same_name.clone());
+    }
+    Err(Error::DefaultTemplateAmbiguous {
+        group: group.to_owned(),
+        available: available.to_vec(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +168,70 @@ mod tests {
             source_root(Some(OsStr::new("   "))),
             Err(Error::MissingScaffold)
         ));
+    }
+
+    #[test]
+    fn default_rule_prefers_the_only_subdirectory() {
+        let root = temp_dir("default-single");
+        fs::create_dir_all(root.join("nix/unico_directorio")).unwrap();
+
+        let selected = select_template(&root, "nix", None).unwrap();
+        assert_eq!(selected.template, "unico_directorio");
+        assert_eq!(selected.dir, root.join("nix").join("unico_directorio"));
+    }
+
+    #[test]
+    fn default_rule_prefers_the_group_named_template() {
+        let root = temp_dir("default-same-name");
+        fs::create_dir_all(root.join("just/just")).unwrap();
+        fs::create_dir_all(root.join("just/other")).unwrap();
+
+        let selected = select_template(&root, "just", None).unwrap();
+        assert_eq!(selected.template, "just");
+    }
+
+    #[test]
+    fn default_rule_fails_when_ambiguous() {
+        let root = temp_dir("default-ambiguous");
+        fs::create_dir_all(root.join("rust/base")).unwrap();
+        fs::create_dir_all(root.join("rust/min")).unwrap();
+
+        match select_template(&root, "rust", None) {
+            Err(Error::DefaultTemplateAmbiguous { group, available }) => {
+                assert_eq!(group, "rust");
+                assert_eq!(available, ["base", "min"]);
+            }
+            other => panic!("expected ambiguity error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explicit_selection_resolves_the_named_template() {
+        let root = temp_dir("explicit");
+        fs::create_dir_all(root.join("rust/min")).unwrap();
+        fs::create_dir_all(root.join("rust/base")).unwrap();
+
+        let selected = select_template(&root, "rust", Some("min")).unwrap();
+        assert_eq!(selected.template, "min");
+        assert_eq!(selected.group, "rust");
+    }
+
+    #[test]
+    fn explicit_selection_fails_listing_availability() {
+        let root = temp_dir("explicit-missing");
+        fs::create_dir_all(root.join("rust/base")).unwrap();
+
+        match select_template(&root, "rust", Some("ghost")) {
+            Err(Error::TemplateNotFound {
+                group,
+                requested,
+                available,
+            }) => {
+                assert_eq!(group, "rust");
+                assert_eq!(requested, "ghost");
+                assert_eq!(available, ["base"]);
+            }
+            other => panic!("expected TemplateNotFound, got {other:?}"),
+        }
     }
 }
