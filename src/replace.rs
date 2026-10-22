@@ -119,7 +119,9 @@ mod tests {
     #[test]
     fn binary_bytes_pass_through_verbatim() {
         let replacements = bind(r#"{"variables": {"name": {"__name__": "demo"}}}"#, &[]);
-        let bytes = [0xFF, 0xFE, 0x00, b'a'];
+        // Built at runtime so the compiler cannot statically check UTF-8 validity.
+        let bad = u8::MAX;
+        let bytes = [bad, 0xFE, 0x00, b'a'];
         assert!(std::str::from_utf8(&bytes).is_err());
         let result = substitute_bytes(&bytes, &replacements);
         assert_eq!(result, Cow::<[u8]>::Borrowed(bytes.as_slice()));

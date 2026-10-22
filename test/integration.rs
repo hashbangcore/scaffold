@@ -194,3 +194,196 @@ fn unknown_init_flag_lists_declared_variables() {
         stderr_of(&typo)
     );
 }
+
+#[test]
+fn full_happy_path_with_dynamic_flags_and_schema() {
+    let repo = TempRepo::new("happy", &["rust"]);
+    repo.write(
+        "rust/min/schema.json",
+        r#"{
+  "include": ["Cargo.toml", "src/"],
+  "variables": {
+    "name": {"__name__": "min_package"},
+    "watch": {"__watch__": "false"},
+    "task": {"__task__": ""}
+  }
+}"#,
+    );
+    repo.write(
+        "rust/min/Cargo.toml",
+        "[package]\nname = \"__name__\"\nwatch = __watch__\n",
+    );
+    repo.write("rust/min/src/main.rs", "fn main() { __task__(); }\n");
+    repo.write("rust/min/README.md", "not exported\n");
+    let dest = repo.path().join("demo");
+    // The spec's mode rule: a destination is a project with a trailing `/`.
+    let dest_flag = format!("{}/", dest.display());
+
+    let output = run(
+        repo.path(),
+        &[
+            "init",
+            "rust",
+            "--name",
+            "demo",
+            dest_flag.as_str(),
+            "--watch",
+            "true",
+            "--task",
+            "build",
+        ],
+    );
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+    assert_eq!(exit_code(&output), 0, "succeeds: {stdout} {stderr}");
+
+    let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).expect("cargo written");
+    assert!(cargo.contains("name = \"demo\""), "name bound: {cargo}");
+    assert!(cargo.contains("watch = true"), "watch overridden: {cargo}");
+    let main = std::fs::read_to_string(dest.join("src/main.rs")).expect("main written");
+    assert_eq!(main, "fn main() { build(); }\n");
+    assert!(!dest.join("README.md").exists(), "whitelist held");
+    assert!(!dest.join("schema.json").exists(), "schema never ships");
+    assert_eq!(stdout, "", "quiet success");
+}
+
+#[test]
+fn file_mode_writes_a_single_exported_file() {
+    let repo = TempRepo::new("filemode", &["flake"]);
+    repo.write(
+        "flake/flake/schema.json",
+        r#"{"variables": {"name": {"__name__": "default_name"}}}"#,
+    );
+    repo.write(
+        "flake/flake/flake.nix",
+        "description = \"__name__\";\noutputs = {{ }};\n",
+    );
+    let dest = repo.path().join("nested/deeper/flake.nix");
+
+    let output = run(
+        repo.path(),
+        &[
+            "init",
+            "flake",
+            "--name",
+            "nombre",
+            dest.to_str().expect("utf8"),
+        ],
+    );
+    let stderr = stderr_of(&output);
+    assert_eq!(exit_code(&output), 0, "succeeds: {stderr}");
+    let content = std::fs::read_to_string(&dest).expect("file written");
+    assert_eq!(
+        content, "description = \"nombre\";\noutputs = {{ }};\n",
+        "single file substituted at the exact path"
+    );
+}
+
+#[test]
+fn file_mode_refuses_template_with_several_exports() {
+    let repo = TempRepo::new("filemode-multi", &["flake"]);
+    repo.write("flake/flake/flake.nix", "a\n");
+    repo.write("flake/flake/README.md", "b\n");
+
+    let output = run(
+        repo.path(),
+        &[
+            "init",
+            "flake",
+            repo.path().join("one.nix").to_str().expect("utf8"),
+        ],
+    );
+    assert_ne!(exit_code(&output), 0);
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("exactly one"),
+        "explains the rule: {stderr}"
+    );
+    assert!(stderr.contains("2"), "reports the export count: {stderr}");
+    assert!(
+        !repo.path().join("one.nix").exists(),
+        "failure writes nothing"
+    );
+}
+
+#[test]
+fn list_group_with_several_templates_prints_sorted() {
+    let repo = TempRepo::new("list-multi", &["rust"]);
+    repo.write("rust/base/placeholder", "-");
+    repo.write("rust/min/placeholder", "-");
+
+    let group_view = run(repo.path(), &["list", "rust"]);
+    assert_eq!(exit_code(&group_view), 0);
+    assert_eq!(stdout_of(&group_view), "base\nmin\n");
+
+    let alias = run(repo.path(), &["-l", "rust"]);
+    assert_eq!(exit_code(&alias), 0);
+    assert_eq!(stdout_of(&alias), "base\nmin\n");
+}
+
+#[test]
+fn init_flag_takes_precedence_over_the_composed_form() {
+    let repo = TempRepo::new("precedence", &["rust"]);
+    repo.write("rust/base/marker", "base\n");
+    repo.write("rust/min/marker", "min\n");
+    let dest = repo.path().join("picked");
+
+    let composed = run(
+        repo.path(),
+        &["init", "rust/min", "-o", &format!("{}/", dest.display())],
+    );
+    assert_eq!(exit_code(&composed), 0);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("marker")).unwrap(),
+        "min\n",
+        "composed positional selects min"
+    );
+    std::fs::remove_dir_all(&dest).expect("reset dest");
+
+    let flagged = run(
+        repo.path(),
+        &[
+            "init",
+            "rust/min",
+            "-t",
+            "base",
+            "-o",
+            &format!("{}/", dest.display()),
+        ],
+    );
+    assert_eq!(exit_code(&flagged), 0);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("marker")).unwrap(),
+        "base\n",
+        "-t overrides the composed selection"
+    );
+}
+
+#[test]
+fn init_refuses_conflicts_and_force_overwrites() {
+    let repo = TempRepo::new("conflict-e2e", &["just"]);
+    repo.write("just/just/Justfile", "new\n");
+    let dest = repo.path().join("workspace");
+    std::fs::create_dir_all(&dest).expect("existing destination");
+    std::fs::write(dest.join("Justfile"), "old\n").expect("conflicting file");
+
+    let refused = run(repo.path(), &["init", "just", dest.to_str().expect("utf8")]);
+    assert_ne!(exit_code(&refused), 0);
+    assert!(stderr_of(&refused).contains("--force"));
+    assert_eq!(
+        std::fs::read_to_string(dest.join("Justfile")).unwrap(),
+        "old\n",
+        "refusal keeps the original"
+    );
+
+    let forced = run(
+        repo.path(),
+        &["init", "just", dest.to_str().expect("utf8"), "--force"],
+    );
+    assert_eq!(exit_code(&forced), 0);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("Justfile")).unwrap(),
+        "new\n",
+        "force overwrites"
+    );
+}

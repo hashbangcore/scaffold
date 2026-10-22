@@ -156,6 +156,15 @@ pub fn fmt_list(items: &[String]) -> String {
     }
 }
 
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,14 +173,5 @@ mod tests {
     fn fmt_list_renders_names_or_placeholder() {
         assert_eq!(fmt_list(&[]), "(none)");
         assert_eq!(fmt_list(&["a".to_owned(), "b".to_owned()]), "a, b");
-    }
-}
-
-impl StdError for Error {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            _ => None,
-        }
     }
 }
