@@ -38,6 +38,12 @@ pub enum Error {
         path: String,
         reason: String,
     },
+    /// Neither a destination path nor `--name` was given.
+    DestinationUnresolved,
+    /// A file destination was asked for, but the template exports other than one file.
+    FileModeMultipleFiles { template: String, exported: usize },
+    /// Destination paths already exist; `--force` overwrites them.
+    Conflict { paths: Vec<String> },
     /// A code path that clap should have prevented was reached.
     Internal { reason: String },
 }
@@ -93,6 +99,19 @@ impl fmt::Display for Error {
                 path,
                 reason,
             } => write!(f, "include '{path}' in template '{template}' {reason}"),
+            Self::DestinationUnresolved => write!(
+                f,
+                "no destination given: pass a destination path or use --name"
+            ),
+            Self::FileModeMultipleFiles { template, exported } => write!(
+                f,
+                "file destinations take exactly one exported file; template '{template}' exports {exported}; use a project destination such as 'dir/'"
+            ),
+            Self::Conflict { paths } => write!(
+                f,
+                "refusing to overwrite existing targets: {}; use --force",
+                fmt_list(paths)
+            ),
             Self::Internal { reason } => write!(f, "internal error: {reason}"),
         }
     }

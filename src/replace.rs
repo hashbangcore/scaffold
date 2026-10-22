@@ -29,7 +29,7 @@ impl Replacements {
             }
         }
         // Longest first so `__name__` is never eaten by a `__name` prefix.
-        pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        pairs.sort_by_key(|(token, _)| std::cmp::Reverse(token.len()));
         Self(pairs)
     }
 
