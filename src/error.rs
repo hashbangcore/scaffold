@@ -28,6 +28,16 @@ pub enum Error {
         group: String,
         available: Vec<String>,
     },
+    /// A variable claim cannot be used: reserved name, bad range, or escape.
+    SchemaInvalid { template: String, reason: String },
+    /// A declared variable shadows a native flag.
+    ReservedVariable { template: String, variable: String },
+    /// An `include` entry escapes the template or points at a missing path.
+    IncludeInvalid {
+        template: String,
+        path: String,
+        reason: String,
+    },
     /// A code path that clap should have prevented was reached.
     Internal { reason: String },
 }
@@ -71,6 +81,18 @@ impl fmt::Display for Error {
                 "group '{group}' has several templates and none is named like the group; choose one with --template; available: {}",
                 fmt_list(available)
             ),
+            Self::SchemaInvalid { template, reason } => {
+                write!(f, "invalid schema.json for template '{template}': {reason}")
+            }
+            Self::ReservedVariable { template, variable } => write!(
+                f,
+                "variable '{variable}' in template '{template}' shadows a native flag; rename it in schema.json"
+            ),
+            Self::IncludeInvalid {
+                template,
+                path,
+                reason,
+            } => write!(f, "include '{path}' in template '{template}' {reason}"),
             Self::Internal { reason } => write!(f, "internal error: {reason}"),
         }
     }
