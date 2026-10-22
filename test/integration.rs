@@ -150,3 +150,47 @@ fn missing_scaffold_env_fails_without_files() {
     assert!(stderr_of(&output).contains("SCAFFOLD"));
     assert!(!probe.exists(), "a missing env must not create anything");
 }
+
+#[test]
+fn init_help_lists_the_schema_dynamic_flags() {
+    let repo = TempRepo::new("init-help", &["just"]);
+    repo.write(
+        "just/just/schema.json",
+        r#"{"variables": {"watch": {"__watch__": "true"}, "task": {"__task__": "build"}}}"#,
+    );
+
+    let output = run(repo.path(), &["init", "just", "--help"]);
+    assert_eq!(exit_code(&output), 0, "help exits successfully");
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains("--watch"), "dynamic flag listed: {stdout}");
+    assert!(stdout.contains("--task"), "dynamic flag listed: {stdout}");
+    assert!(
+        stdout.contains("--name"),
+        "native name still listed: {stdout}"
+    );
+}
+
+#[test]
+fn unknown_init_flag_lists_declared_variables() {
+    let repo = TempRepo::new("init-unknown", &["just"]);
+    repo.write(
+        "just/just/schema.json",
+        r#"{"variables": {"watch": {"__watch__": "true"}, "task": {"__task__": "build"}}}"#,
+    );
+
+    let output = run(repo.path(), &["init", "just", "--host"]);
+    assert_ne!(exit_code(&output), 0, "unknown flags fail");
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("--host"), "the flag is named: {stderr}");
+    assert!(stderr.contains("--watch"), "variables listed: {stderr}");
+    assert!(stderr.contains("--task"), "variables listed: {stderr}");
+    assert!(!stderr.contains("did you mean"), "no false hint: {stderr}");
+
+    let typo = run(repo.path(), &["init", "just", "--tatsk"]);
+    assert_ne!(exit_code(&typo), 0);
+    assert!(
+        stderr_of(&typo).contains("did you mean '--task'?"),
+        "typo hint present: {}",
+        stderr_of(&typo)
+    );
+}

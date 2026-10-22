@@ -44,6 +44,16 @@ pub enum Error {
     FileModeMultipleFiles { template: String, exported: usize },
     /// Destination paths already exist; `--force` overwrites them.
     Conflict { paths: Vec<String> },
+    /// A flag is neither native nor declared by the template's schema.
+    UnknownFlag {
+        /// As typed, including dashes.
+        flag: String,
+        group: String,
+        template: String,
+        variables: Vec<String>,
+        /// Closest declared variable name, when one looks like a typo.
+        suggestion: Option<String>,
+    },
     /// A code path that clap should have prevented was reached.
     Internal { reason: String },
 }
@@ -112,6 +122,25 @@ impl fmt::Display for Error {
                 "refusing to overwrite existing targets: {}; use --force",
                 fmt_list(paths)
             ),
+            Self::UnknownFlag {
+                flag,
+                group,
+                template,
+                variables,
+                suggestion,
+            } => {
+                let declared: Vec<String> =
+                    variables.iter().map(|var| format!("--{var}")).collect();
+                write!(
+                    f,
+                    "unknown option '{flag}' for template '{group}/{template}'; declared flags: {}",
+                    fmt_list(&declared)
+                )?;
+                match suggestion {
+                    Some(suggestion) => write!(f, "; did you mean '--{suggestion}'?"),
+                    None => Ok(()),
+                }
+            }
             Self::Internal { reason } => write!(f, "internal error: {reason}"),
         }
     }
