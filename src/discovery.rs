@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
-/// Resolve the repository root from the `SCAFFOLD` environment value. No fallback exists.
+/// Resolve the repository root from the `SCAFFOLDS` environment value. No fallback exists.
 pub fn source_root(value: Option<&OsStr>) -> Result<PathBuf> {
     let blank = match value {
         None => true,

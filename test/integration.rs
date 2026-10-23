@@ -47,15 +47,15 @@ fn binary() -> PathBuf {
 fn run(repo: &Path, args: &[&str]) -> Output {
     Command::new(binary())
         .args(args)
-        .env("SCAFFOLD", repo)
+        .env("SCAFFOLDS", repo)
         .output()
         .expect("spawn binary")
 }
 
-fn run_without_scaffold(args: &[&str]) -> Output {
+fn run_without_scaffolds(args: &[&str]) -> Output {
     Command::new(binary())
         .args(args)
-        .env_remove("SCAFFOLD")
+        .env_remove("SCAFFOLDS")
         .output()
         .expect("spawn binary")
 }
@@ -145,9 +145,9 @@ fn missing_scaffold_env_fails_without_files() {
     let repo = TempRepo::new("missing-env", &["rust"]);
     let probe = repo.path().join("probe");
 
-    let output = run_without_scaffold(&["list"]);
+    let output = run_without_scaffolds(&["list"]);
     assert_ne!(exit_code(&output), 0);
-    assert!(stderr_of(&output).contains("SCAFFOLD"));
+    assert!(stderr_of(&output).contains("SCAFFOLDS"));
     assert!(!probe.exists(), "a missing env must not create anything");
 }
 

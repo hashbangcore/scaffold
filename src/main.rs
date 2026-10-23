@@ -1,4 +1,4 @@
-//! scaffold: materialize templates from a local repository (`$SCAFFOLD`).
+//! scaffold: materialize templates from a local repository (`$SCAFFOLDS`).
 
 use scaffold::cli;
 

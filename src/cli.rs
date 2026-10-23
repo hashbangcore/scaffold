@@ -53,7 +53,7 @@ fn native_root() -> Command {
         .version(VERSION)
         .about("Materialize templates from a local template repository")
         .long_about(
-            "Groups (one per language) live under $SCAFFOLD. `scaffold init` \
+            "Groups (one per language) live under $SCAFFOLDS. `scaffold init` \
              materializes a template; arguments under init come from each \
              template's schema.json.",
         )
@@ -101,7 +101,7 @@ fn clap_exit(err: clap::Error) -> ! {
 }
 
 fn run_list(group: Option<String>) -> Result<()> {
-    let env_value = std::env::var_os("SCAFFOLD");
+    let env_value = std::env::var_os("SCAFFOLDS");
     let repo = discovery::source_root(env_value.as_deref())?;
     match group {
         None => {
@@ -240,7 +240,7 @@ fn init_root(variables: &[String]) -> Command {
 
 /// Current init dispatch: discovery, schema, dynamic parse, materialize.
 fn run_init(argv: &[OsString]) -> Result<()> {
-    let env_value = std::env::var_os("SCAFFOLD");
+    let env_value = std::env::var_os("SCAFFOLDS");
     let repo = discovery::source_root(env_value.as_deref())?;
     let scan = scan_selection(&argv[2..]);
     let Some(group) = scan.group.clone() else {

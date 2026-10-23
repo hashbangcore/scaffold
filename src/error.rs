@@ -8,7 +8,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Errors surfaced by the CLI. `main` prints them with an `error:` prefix.
 #[derive(Debug)]
 pub enum Error {
-    /// `SCAFFOLD` is unset, empty, or only whitespace; no fallback path exists.
+    /// `SCAFFOLDS` is unset, empty, or only whitespace; no fallback path exists.
     MissingScaffold,
     /// A filesystem interaction failed; `context` names the operation.
     Io {
@@ -74,7 +74,7 @@ impl fmt::Display for Error {
         match self {
             Self::MissingScaffold => write!(
                 f,
-                "environment variable SCAFFOLD must point to the template repository (unset or empty)"
+                "environment variable SCAFFOLDS must point to the template repository (unset or empty)"
             ),
             Self::Io { context, source } => write!(f, "{context}: {source}"),
             Self::GroupNotFound { group } => {
