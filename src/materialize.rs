@@ -1,12 +1,12 @@
 //! Materialize a template tree after checking destination conflicts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::discovery::Selected;
 use crate::error::{Error, Result};
 use crate::replace::{Replacements, substitute_bytes};
-use crate::schema::{SCHEMA_FILE, Schema};
+use crate::schema::{FileSelection, SCHEMA_FILE, Schema};
 
 /// One file or directory waiting to be copied.
 #[derive(Debug)]
@@ -32,18 +32,74 @@ pub struct InitOptions {
 
 /// Plan the files one run writes, sorted for a deterministic order.
 pub fn plan(template_dir: &Path) -> Result<Vec<PlanItem>> {
+    plan_with_selection(template_dir, None)
+}
+
+fn plan_with_selection(
+    template_dir: &Path,
+    selection: Option<&FileSelection>,
+) -> Result<Vec<PlanItem>> {
     let mut items = Vec::new();
     walk_dir(template_dir, PathBuf::new(), &mut items)?;
     items.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok(items)
+    Ok(select_items(items, selection))
 }
 
-/// Collect files under `dir`, skipping symlinks and the root `schema.json`.
-fn walk_dir(dir: &Path, rel_root: PathBuf, items: &mut Vec<PlanItem>) -> Result<()> {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|source| Error::io(format!("read `{}`", dir.display()), source))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+fn select_items(items: Vec<PlanItem>, selection: Option<&FileSelection>) -> Vec<PlanItem> {
+    let include_is_active = selection.is_some_and(FileSelection::has_include);
+    let directories: HashSet<PathBuf> = items
+        .iter()
+        .filter(|item| item.is_dir)
+        .map(|item| item.rel.clone())
         .collect();
+    let mut selected: HashSet<PathBuf> = items
+        .iter()
+        .filter(|item| {
+            let schema_file = item.rel == Path::new(SCHEMA_FILE);
+            let included = selection.is_some_and(|rules| rules.includes(&item.rel));
+            if schema_file && !included {
+                return false;
+            }
+            if include_is_active && !included {
+                return false;
+            }
+            !selection.is_some_and(|rules| rules.excludes(&item.rel))
+        })
+        .map(|item| item.rel.clone())
+        .collect();
+
+    if include_is_active {
+        let selected_paths: Vec<PathBuf> = selected.iter().cloned().collect();
+        for path in selected_paths {
+            for ancestor in path.ancestors().skip(1) {
+                if ancestor.as_os_str().is_empty() {
+                    break;
+                }
+                if directories.contains(ancestor)
+                    && !selection.is_some_and(|rules| rules.excludes(ancestor))
+                {
+                    selected.insert(ancestor.to_owned());
+                }
+            }
+        }
+    }
+
+    items
+        .into_iter()
+        .filter(|item| selected.contains(&item.rel))
+        .collect()
+}
+
+/// Collect files under `dir`, skipping symlinks.
+fn walk_dir(dir: &Path, rel_root: PathBuf, items: &mut Vec<PlanItem>) -> Result<()> {
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(dir)
+        .map_err(|source| Error::io(format!("read `{}`", dir.display()), source))?
+    {
+        let entry =
+            entry.map_err(|source| Error::io(format!("read `{}`", dir.display()), source))?;
+        entries.push(entry.path());
+    }
     entries.sort();
     for path in entries {
         let file_type = std::fs::symlink_metadata(&path)
@@ -57,10 +113,6 @@ fn walk_dir(dir: &Path, rel_root: PathBuf, items: &mut Vec<PlanItem>) -> Result<
             .expect("read_dir names are present")
             .to_owned();
         let rel = rel_root.join(name);
-        if rel == Path::new(SCHEMA_FILE) {
-            // `schema.json` never ships, at any content level.
-            continue;
-        }
         if file_type.is_dir() {
             items.push(PlanItem {
                 rel: rel.clone(),
@@ -141,14 +193,18 @@ fn write_one(item: &PlanItem, target: &Path, replacements: &Replacements) -> Res
     }
     let raw = std::fs::read(&item.abs)
         .map_err(|source| Error::io(format!("read `{}`", item.abs.display()), source))?;
-    let bytes = substitute_bytes(&raw, replacements);
+    let bytes = if item.rel == Path::new(SCHEMA_FILE) {
+        std::borrow::Cow::Borrowed(raw.as_slice())
+    } else {
+        substitute_bytes(&raw, replacements)
+    };
     std::fs::write(target, bytes.as_ref())
         .map_err(|source| Error::io(format!("write `{}`", target.display()), source))
 }
 
 /// Run one init end to end: plan, resolve, precheck, write. Quiet on success.
 pub fn run(selected: &Selected, schema: Option<&Schema>, options: &InitOptions) -> Result<()> {
-    let items = plan(&selected.dir)?;
+    let items = plan_with_selection(&selected.dir, schema.map(|schema| &schema.files))?;
     precheck(&items, options)?;
     let replacements = schema.map_or_else(Replacements::default, |schema| {
         Replacements::bind(&schema.variables, &options.overrides)

@@ -1,6 +1,7 @@
-//! Template schema: `schema.json` with a closed variable registry.
+//! Template schema: variables and path selection rules from `schema.json`.
 
 use crate::error::{Error, Result};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -14,10 +15,36 @@ const RESERVED_NAMES: &[&str] = &["help"];
 pub type Variables = BTreeMap<String, BTreeMap<String, String>>;
 
 /// Parsed and validated `schema.json`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Schema {
     /// Tokens replaceable in copied files, keyed by variable name.
     pub variables: Variables,
+    /// File selection rules applied while planning the copy.
+    pub(crate) files: FileSelection,
+}
+
+#[derive(Debug)]
+pub(crate) struct FileSelection {
+    include: Option<GlobSet>,
+    exclude: Option<GlobSet>,
+}
+
+impl FileSelection {
+    pub(crate) fn has_include(&self) -> bool {
+        self.include.is_some()
+    }
+
+    pub(crate) fn includes(&self, path: &Path) -> bool {
+        self.include
+            .as_ref()
+            .is_some_and(|patterns| matches_path_or_parent(patterns, path))
+    }
+
+    pub(crate) fn excludes(&self, path: &Path) -> bool {
+        self.exclude
+            .as_ref()
+            .is_some_and(|patterns| matches_path_or_parent(patterns, path))
+    }
 }
 
 /// Load and validate `schema.json` from the template directory; absent is valid.
@@ -54,19 +81,114 @@ pub fn parse(raw: &str, template_label: &str) -> Result<Schema> {
         }
     };
     for key in object.keys() {
-        if key.as_str() != "variables" {
+        if !matches!(key.as_str(), "variables" | "include" | "exclude") {
             return Err(invalid(format!("unknown key '{key}'")));
         }
     }
+    let include_patterns = parse_path_patterns(object.get("include"), "include", &invalid)?;
+    let exclude_patterns = parse_path_patterns(object.get("exclude"), "exclude", &invalid)?;
+    let include = compile_path_patterns(&include_patterns, "include", &invalid)?;
+    let exclude = compile_path_patterns(&exclude_patterns, "exclude", &invalid)?;
     let variables = parse_variables(
         object
             .get("variables")
             .map_or(&serde_json::Value::Null, |v| v),
         &invalid,
     )?;
-    let schema = Schema { variables };
+    let schema = Schema {
+        variables,
+        files: FileSelection { include, exclude },
+    };
     validate(&schema, template_label)?;
     Ok(schema)
+}
+
+fn parse_path_patterns(
+    value: Option<&serde_json::Value>,
+    key: &str,
+    invalid: &(dyn Fn(String) -> Error + '_),
+) -> Result<Vec<String>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let patterns = value
+        .as_array()
+        .ok_or_else(|| invalid(format!("'{key}' must be an array of path patterns")))?;
+    patterns
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let pattern = value.as_str().ok_or_else(|| {
+                invalid(format!("'{key}[{index}]' must be a string path pattern"))
+            })?;
+            validate_path_pattern(pattern, key, index, invalid)?;
+            Ok(pattern.to_owned())
+        })
+        .collect()
+}
+
+fn validate_path_pattern(
+    pattern: &str,
+    key: &str,
+    index: usize,
+    invalid: &(dyn Fn(String) -> Error + '_),
+) -> Result<()> {
+    let drive_prefix = pattern.as_bytes().get(1) == Some(&b':')
+        && pattern
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic);
+    if pattern.is_empty()
+        || pattern.starts_with('/')
+        || pattern.starts_with('\\')
+        || pattern.contains('\\')
+        || drive_prefix
+        || pattern
+            .split('/')
+            .any(|part| matches!(part, "" | "." | ".."))
+    {
+        return Err(invalid(format!(
+            "'{key}[{index}]' must be a relative path pattern without '.' or '..' components"
+        )));
+    }
+    Ok(())
+}
+
+fn compile_path_patterns(
+    patterns: &[String],
+    key: &str,
+    invalid: &(dyn Fn(String) -> Error + '_),
+) -> Result<Option<GlobSet>> {
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = GlobSetBuilder::new();
+    for (index, pattern) in patterns.iter().enumerate() {
+        let glob = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .map_err(|error| invalid(format!("invalid '{key}[{index}]' pattern: {error}")))?;
+        builder.add(glob);
+        if let Some(directory) = pattern.strip_suffix("/**")
+            && !directory.is_empty()
+        {
+            let glob = GlobBuilder::new(directory)
+                .literal_separator(true)
+                .build()
+                .map_err(|error| invalid(format!("invalid '{key}[{index}]' pattern: {error}")))?;
+            builder.add(glob);
+        }
+    }
+    builder
+        .build()
+        .map(Some)
+        .map_err(|error| invalid(format!("invalid '{key}' patterns: {error}")))
+}
+
+fn matches_path_or_parent(patterns: &GlobSet, path: &Path) -> bool {
+    path.ancestors()
+        .take_while(|ancestor| !ancestor.as_os_str().is_empty())
+        .any(|ancestor| patterns.is_match(ancestor))
 }
 
 fn describe(value: serde_json::Value) -> String {
@@ -162,7 +284,7 @@ mod tests {
     #[test]
     fn parse_rejects_unknown_keys_and_reserved_help_variable() {
         assert!(matches!(
-            parse(r#"{"include":["file"]}"#, "template"),
+            parse(r#"{"other":["file"]}"#, "template"),
             Err(Error::SchemaInvalid { .. })
         ));
         assert!(matches!(
