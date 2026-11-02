@@ -1,11 +1,14 @@
 //! Command line dispatch: native verbs plus a template-driven init parser.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use clap::error::ErrorKind;
 use clap::{Arg, ArgMatches, Command};
+use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
+use clap_complete::env::CompleteEnv;
+use clap_complete::env::Shells;
 
 use crate::discovery;
 use crate::error::{Error, Result};
@@ -15,6 +18,7 @@ use crate::schema::{self, Schema};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn run() -> Result<()> {
+    CompleteEnv::with_factory(native_root).complete();
     let argv: Vec<OsString> = std::env::args_os().collect();
     let first: Option<String> = argv.get(1).map(|raw| raw.to_string_lossy().into_owned());
     match first.as_deref() {
@@ -36,12 +40,18 @@ fn run_native(argv: Vec<OsString>) -> Result<()> {
         Ok(matches) => matches,
         Err(err) => clap_exit(err),
     };
-    let Some(("list", list_matches)) = matches.subcommand() else {
-        return Err(Error::Internal {
+    match matches.subcommand() {
+        Some(("list", list_matches)) => run_list(list_matches.get_one::<String>("group").cloned()),
+        Some(("completion", completion_matches)) => {
+            let shell = completion_matches
+                .get_one::<String>("shell")
+                .expect("completion shell is required");
+            write_completion(shell)
+        }
+        _ => Err(Error::Internal {
             reason: "native parse produced no dispatchable action".to_owned(),
-        });
-    };
-    run_list(list_matches.get_one::<String>("group").cloned())
+        }),
+    }
 }
 
 /// Build the single command reference shown by `help` and an empty invocation.
@@ -52,7 +62,15 @@ fn native_root() -> Command {
         .disable_help_subcommand(true)
         .subcommand(
             Command::new("init")
-                .about("Copy <group/template> with schema-defined variable options"),
+                .disable_help_flag(true)
+                .disable_version_flag(true)
+                .disable_help_subcommand(true)
+                .about("Copy <group/template> with schema-defined variable options")
+                .arg(
+                    Arg::new("selection")
+                        .required(true)
+                        .add(ArgValueCompleter::new(complete_scaffolds)),
+                ),
         )
         .subcommand(
             Command::new("list")
@@ -61,7 +79,66 @@ fn native_root() -> Command {
         )
         .subcommand(Command::new("help").about("Show this command reference"))
         .subcommand(Command::new("version").about("Show the program version"))
+        .subcommand(
+            Command::new("completion")
+                .disable_help_flag(true)
+                .disable_version_flag(true)
+                .disable_help_subcommand(true)
+                .about("Generate shell completion setup")
+                .arg(
+                    Arg::new("shell")
+                        .required(true)
+                        .value_parser(["bash", "elvish", "fish", "powershell", "zsh"])
+                        .help("shell to generate completion setup for"),
+                ),
+        )
         .after_help("Use the $SCAFFOLDS environment variable to select the scaffold directory.")
+}
+
+fn write_completion(shell: &str) -> Result<()> {
+    let shells = Shells::builtins();
+    let completer = shells.completer(shell).ok_or_else(|| Error::Internal {
+        reason: format!("no completion generator for shell `{shell}`"),
+    })?;
+    let binary = std::env::args_os()
+        .next()
+        .unwrap_or_else(|| OsString::from("scaffold"));
+    let binary = binary.to_string_lossy();
+    completer
+        .write_registration(
+            "COMPLETE",
+            "scaffold",
+            "scaffold",
+            &binary,
+            &mut std::io::stdout(),
+        )
+        .map_err(|source| Error::io("write shell completion setup", source))
+}
+
+fn complete_scaffolds(current: &OsStr) -> Vec<CompletionCandidate> {
+    let Some(current) = current.to_str() else {
+        return Vec::new();
+    };
+    let Ok(root) = discovery::source_root(std::env::var_os("SCAFFOLDS").as_deref()) else {
+        return Vec::new();
+    };
+    let Ok(groups) = discovery::groups(&root) else {
+        return Vec::new();
+    };
+
+    let mut candidates = Vec::new();
+    for group in groups {
+        let Ok(templates) = discovery::templates(&root, &group) else {
+            continue;
+        };
+        for template in templates {
+            let selection = format!("{group}/{template}");
+            if selection.starts_with(current) {
+                candidates.push(CompletionCandidate::new(selection));
+            }
+        }
+    }
+    candidates
 }
 
 fn print_help() {
