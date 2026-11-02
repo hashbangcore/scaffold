@@ -71,7 +71,7 @@ fn native_root() -> Command {
                 .disable_help_flag(true)
                 .disable_version_flag(true)
                 .disable_help_subcommand(true)
-                .about("Copy <group/template> with schema-defined variable options")
+                .about("Copy a scaffold with schema-defined variable options")
                 .arg(
                     Arg::new("selection")
                         .required(true)
@@ -88,10 +88,11 @@ fn native_root() -> Command {
                 .disable_help_flag(true)
                 .disable_version_flag(true)
                 .disable_help_subcommand(true)
-                .about("Print a template's schema.json")
+                .about("Print a scaffold's schema.json")
                 .arg(
                     Arg::new("selection")
                         .required(true)
+                        .help("group or group/template selection")
                         .add(ArgValueCompleter::new(complete_scaffolds)),
                 ),
         )
@@ -213,15 +214,23 @@ fn run_list(group: Option<String>) -> Result<()> {
     Ok(())
 }
 
+fn select_scaffold(repo: &Path, selection: &str) -> Result<discovery::Selected> {
+    let selection = selection.strip_suffix('/').unwrap_or(selection);
+    match selection.split_once('/') {
+        Some((group, template)) if !group.is_empty() && !template.is_empty() => {
+            discovery::select_template(repo, group, Some(template))
+        }
+        Some(_) => Err(Error::InvalidSelection {
+            selection: selection.to_owned(),
+        }),
+        None => discovery::select_template(repo, selection, None),
+    }
+}
+
 fn run_schema(selection: &str) -> Result<()> {
     let env_value = std::env::var_os("SCAFFOLDS");
     let repo = discovery::source_root(env_value.as_deref())?;
-    let Some((group, template)) = selection.split_once('/') else {
-        return Err(Error::InvalidSelection {
-            selection: selection.to_owned(),
-        });
-    };
-    let selected = discovery::select_template(&repo, group, Some(template))?;
+    let selected = select_scaffold(&repo, selection)?;
     let schema_path = selected.dir.join(schema::SCHEMA_FILE);
     match std::fs::read_to_string(&schema_path) {
         Ok(contents) => print!("{contents}"),
@@ -243,11 +252,11 @@ fn init_root(variables: &[String]) -> Command {
         .disable_help_flag(true)
         .disable_version_flag(true)
         .disable_help_subcommand(true)
-        .about("Materialize a template")
+        .about("Materialize a scaffold")
         .arg(
             Arg::new("selection")
                 .required(true)
-                .help("template selection in group/template form"),
+                .help("group or group/template selection"),
         )
         .arg(
             Arg::new("destination")
@@ -277,10 +286,7 @@ fn run_init(argv: &[OsString]) -> Result<()> {
         // Nothing to resolve; clap reports the missing selection usage error.
         static_usage(argv.to_vec());
     };
-    let Some((group, template)) = selection.split_once('/') else {
-        return Err(Error::InvalidSelection { selection });
-    };
-    let selected = discovery::select_template(&repo, group, Some(template))?;
+    let selected = select_scaffold(&repo, &selection)?;
     let label = format!("{}/{}", selected.group, selected.template);
     let schema = schema::load(&selected.dir, &label)?;
     let variables: Vec<String> = schema

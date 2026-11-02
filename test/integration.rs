@@ -297,6 +297,60 @@ fn init_without_destination_copies_into_the_current_directory() {
 }
 
 #[test]
+fn init_selects_the_group_named_template_by_default() {
+    let repo = TempRepo::new("init-default-template", &["just"]);
+    repo.write(
+        "just/just/schema.json",
+        r#"{"variables":{"name":{"__name__":"default"}}}"#,
+    );
+    repo.write("just/just/marker.txt", "default template: __name__\n");
+    repo.write("just/publish/marker.txt", "publish template\n");
+    let destination = repo.path().join("output");
+
+    let output = run(
+        repo.path(),
+        &[
+            "init",
+            "just",
+            destination.to_str().expect("utf8"),
+            "--name",
+            "ola",
+        ],
+    );
+
+    assert_eq!(exit_code(&output), 0, "{}", stderr_of(&output));
+    assert_eq!(
+        std::fs::read_to_string(destination.join("marker.txt")).unwrap(),
+        "default template: ola\n"
+    );
+}
+
+#[test]
+fn schema_selects_the_only_template_by_default() {
+    let repo = TempRepo::new("schema-default-template", &["single"]);
+    let contents = "{\"variables\":{}}\n";
+    repo.write("single/custom/schema.json", contents);
+
+    let output = run(repo.path(), &["schema", "single"]);
+
+    assert_eq!(exit_code(&output), 0, "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), contents);
+}
+
+#[test]
+fn schema_accepts_a_trailing_slash_after_the_group() {
+    let repo = TempRepo::new("schema-default-trailing-slash", &["just"]);
+    let contents = "{\"variables\":{\"name\":{\"__name__\":\"default\"}}}\n";
+    repo.write("just/just/schema.json", contents);
+    repo.write("just/publish/schema.json", "{\"variables\":{}}\n");
+
+    let output = run(repo.path(), &["schema", "just/"]);
+
+    assert_eq!(exit_code(&output), 0, "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), contents);
+}
+
+#[test]
 fn init_creates_nested_destination_directories() {
     let repo = TempRepo::new("init-nested-source", &["just"]);
     repo.write("just/publish/nested/Justfile", "all:\n    echo ok\n");
