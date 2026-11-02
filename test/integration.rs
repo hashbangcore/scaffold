@@ -97,7 +97,7 @@ fn empty_invocation_and_help_subcommand_show_the_same_reference() {
     assert_eq!(stdout_of(&empty), stdout_of(&help));
 
     let stdout = stdout_of(&help);
-    for command in ["init", "list", "help", "version"] {
+    for command in ["init", "list", "schema", "help", "version"] {
         assert!(stdout.contains(command), "help lists {command}: {stdout}");
     }
     assert!(
@@ -108,6 +108,41 @@ fn empty_invocation_and_help_subcommand_show_the_same_reference() {
         stdout
             .contains("Use the $SCAFFOLDS environment variable to select the scaffold directory.")
     );
+}
+
+#[test]
+fn schema_prints_the_selected_schema_file() {
+    let repo = TempRepo::new("schema-present", &["rust"]);
+    let contents = "{\n  \"include\": [\"src/**\"]\n}\n";
+    repo.write("rust/min/schema.json", contents);
+
+    let output = run(repo.path(), &["schema", "rust/min"]);
+
+    assert_eq!(exit_code(&output), 0, "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), contents);
+    assert!(stderr_of(&output).is_empty());
+}
+
+#[test]
+fn schema_without_a_schema_file_prints_a_notice_and_succeeds() {
+    let repo = TempRepo::new("schema-missing", &["rust"]);
+    repo.write("rust/min/src/main.rs", "fn main() {}\n");
+
+    let output = run(repo.path(), &["schema", "rust/min"]);
+
+    assert_eq!(exit_code(&output), 0, "{}", stderr_of(&output));
+    assert_eq!(stdout_of(&output), "No schema.json for 'rust/min'.\n");
+    assert!(stderr_of(&output).is_empty());
+}
+
+#[test]
+fn schema_has_no_subcommand_specific_help() {
+    let repo = TempRepo::new("schema-help", &["rust"]);
+
+    let output = run(repo.path(), &["schema", "--help"]);
+
+    assert_ne!(exit_code(&output), 0);
+    assert!(!stdout_of(&output).contains("Print a template's schema.json"));
 }
 
 #[test]

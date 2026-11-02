@@ -42,6 +42,12 @@ fn run_native(argv: Vec<OsString>) -> Result<()> {
     };
     match matches.subcommand() {
         Some(("list", list_matches)) => run_list(list_matches.get_one::<String>("group").cloned()),
+        Some(("schema", schema_matches)) => {
+            let selection = schema_matches
+                .get_one::<String>("selection")
+                .expect("schema selection is required");
+            run_schema(selection)
+        }
         Some(("completion", completion_matches)) => {
             let shell = completion_matches
                 .get_one::<String>("shell")
@@ -76,6 +82,18 @@ fn native_root() -> Command {
             Command::new("list")
                 .about("List groups or templates in a group")
                 .arg(Arg::new("group").help("group whose templates should be listed")),
+        )
+        .subcommand(
+            Command::new("schema")
+                .disable_help_flag(true)
+                .disable_version_flag(true)
+                .disable_help_subcommand(true)
+                .about("Print a template's schema.json")
+                .arg(
+                    Arg::new("selection")
+                        .required(true)
+                        .add(ArgValueCompleter::new(complete_scaffolds)),
+                ),
         )
         .subcommand(Command::new("help").about("Show this command reference"))
         .subcommand(Command::new("version").about("Show the program version"))
@@ -125,16 +143,22 @@ fn complete_scaffolds(current: &OsStr) -> Vec<CompletionCandidate> {
     let Ok(groups) = discovery::groups(&root) else {
         return Vec::new();
     };
+    complete_scaffold_candidates(&root, current, groups)
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect()
+}
 
+fn complete_scaffold_candidates(root: &Path, current: &str, groups: Vec<String>) -> Vec<String> {
     let mut candidates = Vec::new();
     for group in groups {
-        let Ok(templates) = discovery::templates(&root, &group) else {
+        let Ok(templates) = discovery::templates(root, &group) else {
             continue;
         };
         for template in templates {
             let selection = format!("{group}/{template}");
             if selection.starts_with(current) {
-                candidates.push(CompletionCandidate::new(selection));
+                candidates.push(selection);
             }
         }
     }
@@ -184,6 +208,28 @@ fn run_list(group: Option<String>) -> Result<()> {
                     println!("{name}");
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+fn run_schema(selection: &str) -> Result<()> {
+    let env_value = std::env::var_os("SCAFFOLDS");
+    let repo = discovery::source_root(env_value.as_deref())?;
+    let Some((group, template)) = selection.split_once('/') else {
+        return Err(Error::InvalidSelection {
+            selection: selection.to_owned(),
+        });
+    };
+    let selected = discovery::select_template(&repo, group, Some(template))?;
+    let schema_path = selected.dir.join(schema::SCHEMA_FILE);
+    match std::fs::read_to_string(&schema_path) {
+        Ok(contents) => print!("{contents}"),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            println!("No schema.json for '{selection}'.");
+        }
+        Err(source) => {
+            return Err(Error::io(format!("read schema for '{selection}'"), source));
         }
     }
     Ok(())

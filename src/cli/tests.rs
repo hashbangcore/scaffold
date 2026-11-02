@@ -81,3 +81,17 @@ fn edit_distance_is_the_classic_metric() {
     assert_eq!(edit_distance("same", "same"), 0);
     assert_eq!(edit_distance("abc", "xyz"), 3);
 }
+
+#[test]
+fn scaffold_completion_returns_matching_group_template_paths() {
+    let root = std::env::temp_dir().join(format!("scaffold-completion-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("rust/min")).expect("create rust template");
+    std::fs::create_dir_all(root.join("just/publish")).expect("create just template");
+    let groups = discovery::groups(&root).expect("read template groups");
+
+    let candidates = complete_scaffold_candidates(&root, "ru", groups);
+
+    assert_eq!(candidates, ["rust/min"]);
+    std::fs::remove_dir_all(root).expect("remove completion fixture");
+}
