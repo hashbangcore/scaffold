@@ -2,6 +2,7 @@
 name = "scaffold"
 version = "0.1.0"
 edition = "2024"
+description = "Scaffold manager"
 
 [dependencies]
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "string"] }
