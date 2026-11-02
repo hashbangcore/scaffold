@@ -2,9 +2,10 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use clap::error::ErrorKind;
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{Arg, ArgMatches, Command};
 
 use crate::discovery;
 use crate::error::{Error, Result};
@@ -13,15 +14,15 @@ use crate::schema::{self, Schema};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Long names accepted under `init` besides the template's own variables.
-const NATIVE_LONGS: &[&str] = &["name", "output", "template", "force", "help"];
-
 pub fn run() -> Result<()> {
     let argv: Vec<OsString> = std::env::args_os().collect();
     let first: Option<String> = argv.get(1).map(|raw| raw.to_string_lossy().into_owned());
     match first.as_deref() {
-        // clap only accepts `-V/--version`; `-v` is routed by hand.
-        Some("-v") => {
+        None | Some("help") => {
+            print_help();
+            Ok(())
+        }
+        Some("version") => {
             println!("scaffold {VERSION}");
             Ok(())
         }
@@ -35,50 +36,38 @@ fn run_native(argv: Vec<OsString>) -> Result<()> {
         Ok(matches) => matches,
         Err(err) => clap_exit(err),
     };
-    let group = if let Some((_, list_matches)) = matches.subcommand() {
-        list_matches.get_one::<String>("group").cloned()
-    } else if matches.get_flag("root_list") {
-        matches.get_one::<String>("root_group").cloned()
-    } else {
+    let Some(("list", list_matches)) = matches.subcommand() else {
         return Err(Error::Internal {
             reason: "native parse produced no dispatchable action".to_owned(),
         });
     };
-    run_list(group)
+    run_list(list_matches.get_one::<String>("group").cloned())
 }
 
-/// Parse root arguments with clap, keeping help/version observable.
+/// Build the single command reference shown by `help` and an empty invocation.
 fn native_root() -> Command {
     Command::new("scaffold")
-        .version(VERSION)
-        .about("Materialize templates from a local template repository")
-        .long_about(
-            "Groups (one per language) live under $SCAFFOLDS. `scaffold init` \
-             materializes a template; arguments under init come from each \
-             template's schema.json.",
-        )
-        .arg_required_else_help(true)
-        .arg(
-            Arg::new("root_list")
-                .short('l')
-                .long("list")
-                .action(ArgAction::SetTrue)
-                .help("list groups; with an argument, list that group's templates"),
-        )
-        .arg(
-            Arg::new("root_group")
-                .help("group to inspect; requires --list")
-                .requires("root_list"),
+        .disable_help_flag(true)
+        .disable_version_flag(true)
+        .disable_help_subcommand(true)
+        .subcommand(
+            Command::new("init")
+                .about("Copy <group/template> with schema-defined variable options"),
         )
         .subcommand(
             Command::new("list")
-                .about("List groups, or the templates of one group")
-                .arg(Arg::new("group").help("group name; when omitted, list all groups")),
+                .about("List groups or templates in a group")
+                .arg(Arg::new("group").help("group whose templates should be listed")),
         )
-        // Displayed in the root help; `init` itself never parses here.
-        .subcommand(
-            Command::new("init").about("Materialize a template (see `scaffold init --help`)"),
-        )
+        .subcommand(Command::new("help").about("Show this command reference"))
+        .subcommand(Command::new("version").about("Show the program version"))
+        .after_help("Use the $SCAFFOLDS environment variable to select the scaffold directory.")
+}
+
+fn print_help() {
+    let mut command = native_root();
+    let _ = command.print_help();
+    println!();
 }
 
 /// Terminate in clap's own style: help/version to stdout with 0, usage errors to stderr with 2.
@@ -125,109 +114,23 @@ fn run_list(group: Option<String>) -> Result<()> {
 
 // --- Init path: early scan, schema lookup, dynamic flags, materialization ---
 
-/// The selection found before any schema is known.
-#[derive(Debug, Default, PartialEq)]
-struct Scan {
-    group: Option<String>,
-    /// Template from the composed `group/template` positional.
-    composite: Option<String>,
-    /// Template from a `-t/--template` anywhere on the line.
-    flagged: Option<String>,
-}
-
-impl Scan {
-    /// `-t` takes precedence over the composed form.
-    fn explicit(&self) -> Option<String> {
-        self.flagged.clone().or(self.composite.clone())
-    }
-}
-
-/// Scan raw argv for the `[group][/template]` selection and explicit `-t`.
-///
-/// The selection positional comes first by contract; known value-taking
-/// natives (`-t`, `-o`, `--name`) consume their next token so flag values are
-/// never mistaken for the selection.
-fn scan_selection(tokens: &[OsString]) -> Scan {
-    let mut scan = Scan::default();
-    let mut skip_next = false;
-    for (index, raw) in tokens.iter().enumerate() {
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        let token = raw.to_string_lossy().into_owned();
-        if token == "-t" || token == "--template" {
-            scan.flagged = tokens
-                .get(index + 1)
-                .map(|raw| raw.to_string_lossy().into_owned());
-            skip_next = true;
-        } else if let Some(value) = inline_value_of(&token, "--template") {
-            scan.flagged = Some(value);
-        } else if token == "-o" || token == "--output" || token == "--name" {
-            skip_next = true;
-        } else if !token.starts_with('-') && scan.group.is_none() {
-            let (group, template) = match token.rsplit_once('/') {
-                Some((head, tail)) => (head, Some(tail.to_owned())),
-                None => (token.as_str(), None),
-            };
-            scan.group = Some(group.trim_end_matches('/').to_owned());
-            scan.composite = template;
-        }
-    }
-    scan
-}
-
-/// Value of a `--flag=value` token, if that is its shape.
-fn inline_value_of(token: &str, flag: &str) -> Option<String> {
-    token
-        .strip_prefix(flag)
-        .filter(|rest| rest.starts_with('='))
-        .map(|value| value[1..].to_owned())
-}
-
-/// The init command: native flags plus one `--<variable>` per schema variable.
+/// The init command accepts one destination and the selected template's variables.
 fn init_root(variables: &[String]) -> Command {
     let mut cmd = Command::new("init")
-        .about("Materialize a template from a group")
+        .disable_help_flag(true)
+        .disable_version_flag(true)
+        .disable_help_subcommand(true)
+        .about("Materialize a template")
         .arg(
             Arg::new("selection")
                 .required(true)
-                .help("group[/template]; -t overrides a composed template"),
+                .help("template selection in group/template form"),
         )
         .arg(
-            Arg::new("dest")
-                .help("destination path; '/'-suffixed or existing directory gets a project"),
-        )
-        .arg(
-            Arg::new("name")
-                .long("name")
-                .num_args(1)
-                .help("project name; drives the default destination and the name variable"),
-        )
-        .arg(
-            Arg::new("template")
-                .short('t')
-                .long("template")
-                .num_args(1)
-                .help("template alias inside the group"),
-        )
-        .arg(
-            Arg::new("output")
-                .short('o')
-                .long("output")
-                .num_args(1)
-                .help("destination path; wins over the positional destination"),
-        )
-        .arg(
-            Arg::new("force")
-                .long("force")
-                .action(ArgAction::SetTrue)
-                .help("overwrite existing destination files"),
+            Arg::new("destination")
+                .help("destination directory; defaults to the current directory"),
         );
     for variable in variables {
-        if variable == "name" {
-            continue; // the native --name covers it
-        }
         cmd = cmd.arg(
             Arg::new(variable.clone())
                 .long(variable.clone())
@@ -235,27 +138,33 @@ fn init_root(variables: &[String]) -> Command {
                 .required(false),
         );
     }
-    Command::new("scaffold").subcommand(cmd)
+    Command::new("scaffold")
+        .disable_help_flag(true)
+        .disable_version_flag(true)
+        .disable_help_subcommand(true)
+        .subcommand(cmd)
 }
 
-/// Current init dispatch: discovery, schema, dynamic parse, materialize.
+/// Resolve a template, parse its declared variables, and materialize it.
 fn run_init(argv: &[OsString]) -> Result<()> {
     let env_value = std::env::var_os("SCAFFOLDS");
     let repo = discovery::source_root(env_value.as_deref())?;
-    let scan = scan_selection(&argv[2..]);
-    let Some(group) = scan.group.clone() else {
+    let selection = argv.get(2).map(|raw| raw.to_string_lossy().into_owned());
+    let Some(selection) = selection.filter(|value| !value.starts_with('-')) else {
         // Nothing to resolve; clap reports the missing selection usage error.
         static_usage(argv.to_vec());
     };
-    let explicit = scan.explicit();
-    let selected = discovery::select_template(&repo, &group, explicit.as_deref())?;
+    let Some((group, template)) = selection.split_once('/') else {
+        return Err(Error::InvalidSelection { selection });
+    };
+    let selected = discovery::select_template(&repo, group, Some(template))?;
     let label = format!("{}/{}", selected.group, selected.template);
     let schema = schema::load(&selected.dir, &label)?;
     let variables: Vec<String> = schema
         .as_ref()
         .map(|schema| schema.variables.keys().cloned().collect())
         .unwrap_or_default();
-    reject_unknown_flags(&argv[2..], &variables, &selected)?;
+    reject_unknown_flags(&argv[3..], &variables, &selected)?;
     let matches = parse_init(&variables, argv.to_vec())?;
     let options = init_options(&matches, schema.as_ref());
     materialize::run(&selected, schema.as_ref(), &options)
@@ -283,7 +192,7 @@ fn parse_init(variables: &[String], argv: Vec<OsString>) -> Result<ArgMatches> {
     Ok(init.clone())
 }
 
-/// Unknown flags must reference the template's declared variables.
+/// Unknown flags must reference variables declared by the selected template.
 fn reject_unknown_flags(
     tokens: &[OsString],
     variables: &[String],
@@ -309,14 +218,14 @@ fn reject_unknown_flags(
         if head == "-h" || head == "--help" {
             continue;
         }
-        if matches!(head, "-t" | "--template" | "-o" | "--output" | "--name")
-            && !token.contains('=')
-        {
-            skip_next = true;
+        let stripped = head.trim_start_matches('-');
+        if stripped == "h" || stripped == "help" {
             continue;
         }
-        let stripped = head.trim_start_matches('-');
-        if NATIVE_LONGS.contains(&stripped) || variables.iter().any(|var| var == stripped) {
+        if variables.iter().any(|var| var == stripped) {
+            if !token.contains('=') {
+                skip_next = true;
+            }
             continue;
         }
         return Err(Error::UnknownFlag {
@@ -371,17 +280,14 @@ fn init_options(matches: &ArgMatches, schema: Option<&Schema>) -> materialize::I
                 overrides.insert(variable.clone(), value.clone());
             }
         }
-        if schema.variables.contains_key("name")
-            && let Some(name) = matches.get_one::<String>("name")
-        {
-            overrides.insert("name".to_owned(), name.clone());
-        }
     }
     materialize::InitOptions {
-        name: matches.get_one::<String>("name").cloned(),
-        dest: matches.get_one::<String>("dest").cloned(),
-        output: matches.get_one::<String>("output").cloned(),
-        force: matches.get_flag("force"),
+        destination: matches
+            .get_one::<String>("destination")
+            .map_or_else(|| PathBuf::from("."), PathBuf::from),
+        destination_is_implicit: matches
+            .get_one::<String>("destination")
+            .is_none_or(|destination| Path::new(destination) == Path::new(".")),
         overrides,
     }
 }

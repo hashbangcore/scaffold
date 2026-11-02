@@ -13,8 +13,7 @@ impl Replacements {
     /// Bind every token: the knob's flag value replaces all of its tokens,
     /// otherwise each token keeps its own default.
     ///
-    /// The universal `--name` alias reaches this layer as an override for the
-    /// variable `name`; the CLI decides whether the schema declares it.
+    /// The CLI supplies overrides only for variables declared by the schema.
     #[must_use]
     pub fn bind(variables: &Variables, overrides: &BTreeMap<String, String>) -> Self {
         let mut pairs = Vec::new();

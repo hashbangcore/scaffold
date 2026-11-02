@@ -23,6 +23,8 @@ pub enum Error {
         requested: String,
         available: Vec<String>,
     },
+    /// The selection must use the `group/template` form.
+    InvalidSelection { selection: String },
     /// The group has several templates and none is named like the group.
     DefaultTemplateAmbiguous {
         group: String,
@@ -30,19 +32,11 @@ pub enum Error {
     },
     /// A variable claim cannot be used: reserved name, bad range, or escape.
     SchemaInvalid { template: String, reason: String },
-    /// A declared variable shadows a native flag.
+    /// A declared variable conflicts with clap's help flag.
     ReservedVariable { template: String, variable: String },
-    /// An `include` entry escapes the template or points at a missing path.
-    IncludeInvalid {
-        template: String,
-        path: String,
-        reason: String,
-    },
-    /// Neither a destination path nor `--name` was given.
-    DestinationUnresolved,
-    /// A file destination was asked for, but the template exports other than one file.
-    FileModeMultipleFiles { template: String, exported: usize },
-    /// Destination paths already exist; `--force` overwrites them.
+    /// The destination directory already exists.
+    DestinationExists { path: String },
+    /// One or more targets in the current directory already exist.
     Conflict { paths: Vec<String> },
     /// A flag is neither native nor declared by the template's schema.
     UnknownFlag {
@@ -92,9 +86,13 @@ impl fmt::Display for Error {
                 "template '{requested}' does not exist in group '{group}'; available: {}",
                 fmt_list(available)
             ),
+            Self::InvalidSelection { selection } => write!(
+                f,
+                "invalid template selection '{selection}'; use group/template"
+            ),
             Self::DefaultTemplateAmbiguous { group, available } => write!(
                 f,
-                "group '{group}' has several templates and none is named like the group; choose one with --template; available: {}",
+                "group '{group}' has several templates and none is named like the group; choose one with group/template; available: {}",
                 fmt_list(available)
             ),
             Self::SchemaInvalid { template, reason } => {
@@ -102,24 +100,14 @@ impl fmt::Display for Error {
             }
             Self::ReservedVariable { template, variable } => write!(
                 f,
-                "variable '{variable}' in template '{template}' shadows a native flag; rename it in schema.json"
+                "variable '{variable}' in template '{template}' conflicts with the CLI help flag"
             ),
-            Self::IncludeInvalid {
-                template,
-                path,
-                reason,
-            } => write!(f, "include '{path}' in template '{template}' {reason}"),
-            Self::DestinationUnresolved => write!(
-                f,
-                "no destination given: pass a destination path or use --name"
-            ),
-            Self::FileModeMultipleFiles { template, exported } => write!(
-                f,
-                "file destinations take exactly one exported file; template '{template}' exports {exported}; use a project destination such as 'dir/'"
-            ),
+            Self::DestinationExists { path } => {
+                write!(f, "destination directory '{path}' already exists")
+            }
             Self::Conflict { paths } => write!(
                 f,
-                "refusing to overwrite existing targets: {}; use --force",
+                "refusing to overwrite existing targets: {}",
                 fmt_list(paths)
             ),
             Self::UnknownFlag {
