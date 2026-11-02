@@ -1,0 +1,33 @@
+name := `basename "$(git rev-parse --show-toplevel)"`
+repo := "hashbangcore/" + name
+target := "x86_64-unknown-linux-gnu"
+version := "v" + `cargo pkgid | sed 's/.*#//'`
+
+tag:
+    git tag -a {{ version }} -m "Release {{ version }}"
+    git push github {{ version }}
+
+build name=name target=target:
+    cargo build --bin {{ name }} --release {{ if target != "" { "--target " + target } else { "" } }}
+
+artifacts target=target name=name:
+    mkdir -p ./artifacts/{{ version }}
+    cp ../target{{ if target != "" { "/" + target } else { "" } }}/release/{{ name }} ./artifacts/{{ version }}/{{ name }}
+    tar -czf ./artifacts/{{ version }}/{{ name }}-{{ version }}{{ if target != "" { "-" + target } else { "" } }}.tar.gz -C ./artifacts/{{ version }} {{ name }}
+    rm -f ./artifacts/{{ version }}/{{ name }}
+
+checksum:
+    sha256sum ./artifacts/{{ version }}/*.tar.gz > ./artifacts/{{ version }}/SHA256SUMS
+
+upload:
+    gh release create {{ version }} ./artifacts/{{ version }}/*.tar.gz ./artifacts/{{ version }}/SHA256SUMS \
+      --repo {{ repo }} \
+      --verify-tag \
+      --title "{{ name }} {{ version }}" \
+      --generate-notes
+
+info:
+    @echo "project={{ name }}"
+    @echo "repo={{ repo }}"
+    @echo "version={{ version }}"
+    @echo "target={{ target }}"
