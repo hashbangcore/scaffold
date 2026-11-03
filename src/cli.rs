@@ -81,7 +81,11 @@ fn native_root() -> Command {
         .subcommand(
             Command::new("list")
                 .about("List groups or templates in a group")
-                .arg(Arg::new("group").help("group whose templates should be listed")),
+                .arg(
+                    Arg::new("group")
+                        .help("group whose templates should be listed")
+                        .add(ArgValueCompleter::new(complete_groups)),
+                ),
         )
         .subcommand(
             Command::new("schema")
@@ -147,6 +151,30 @@ fn complete_scaffolds(current: &OsStr) -> Vec<CompletionCandidate> {
     complete_scaffold_candidates(&root, current, groups)
         .into_iter()
         .map(CompletionCandidate::new)
+        .collect()
+}
+
+fn complete_groups(current: &OsStr) -> Vec<CompletionCandidate> {
+    let Some(current) = current.to_str() else {
+        return Vec::new();
+    };
+    let Ok(root) = discovery::source_root(std::env::var_os("SCAFFOLDS").as_deref()) else {
+        return Vec::new();
+    };
+    let Ok(groups) = discovery::groups(&root) else {
+        return Vec::new();
+    };
+    complete_group_candidates(&groups, current)
+        .into_iter()
+        .map(CompletionCandidate::new)
+        .collect()
+}
+
+fn complete_group_candidates(groups: &[String], current: &str) -> Vec<String> {
+    groups
+        .iter()
+        .filter(|group| group.starts_with(current))
+        .cloned()
         .collect()
 }
 

@@ -95,3 +95,11 @@ fn scaffold_completion_returns_matching_group_template_paths() {
     assert_eq!(candidates, ["rust/min"]);
     std::fs::remove_dir_all(root).expect("remove completion fixture");
 }
+
+#[test]
+fn group_completion_returns_only_matching_group_names() {
+    let groups = ["css", "envrc", "flake", "just", "license"].map(str::to_owned);
+
+    assert_eq!(complete_group_candidates(&groups, ""), groups);
+    assert_eq!(complete_group_candidates(&groups, "fl"), ["flake"]);
+}
