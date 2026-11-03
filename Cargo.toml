@@ -3,6 +3,11 @@ name = "scaffold"
 version = "0.1.0"
 edition = "2024"
 description = "Scaffold manager"
+authors = ["Hash <hashbangcore@duck.com>"]
+categories = ["command-line-utilities"]
+keywords = ["cli", "scaffold"]
+license = "BSD-2-Clause"
+repository = "https://github.com/hashbangcore/scaffold"
 
 [dependencies]
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "string"] }
