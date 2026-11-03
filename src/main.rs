@@ -1,6 +1,6 @@
 //! scaffold: materialize templates from a local repository (`$SCAFFOLDS`).
 
-use scaffold::cli;
+use scaffold_cli::cli;
 
 fn main() -> std::process::ExitCode {
     match cli::run() {

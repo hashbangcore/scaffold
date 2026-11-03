@@ -1,5 +1,5 @@
 [package]
-name = "scaffold"
+name = "scaffold-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Scaffold manager"
@@ -8,6 +8,10 @@ categories = ["command-line-utilities"]
 keywords = ["cli", "scaffold"]
 license = "BSD-2-Clause"
 repository = "https://github.com/hashbangcore/scaffold"
+
+[[bin]]
+name = "scaffold"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions", "string"] }
