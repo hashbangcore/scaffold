@@ -214,7 +214,7 @@ fn init_has_no_subcommand_specific_help() {
     let repo = TempRepo::new("init-help", &["just"]);
     repo.write(
         "just/publish/schema.json",
-        r#"{"variables": {"watch": {"__watch__": "true"}}}"#,
+        r#"{"variables": {"watch": "true"}}"#,
     );
 
     let output = run(repo.path(), &["init", "just/publish", "--help"]);
@@ -227,7 +227,7 @@ fn unknown_init_flag_lists_declared_variables() {
     let repo = TempRepo::new("init-unknown", &["just"]);
     repo.write(
         "just/publish/schema.json",
-        r#"{"variables": {"watch": {"__watch__": "true"}, "task": {"__task__": "build"}}}"#,
+        r#"{"variables": {"watch": "true", "task": "build"}}"#,
     );
 
     let output = run(repo.path(), &["init", "just/publish", "--host"]);
@@ -247,11 +247,11 @@ fn init_copies_everything_except_schema_and_applies_dynamic_flags() {
     let repo = TempRepo::new("init-copy", &["rust"]);
     repo.write(
         "rust/min/schema.json",
-        r#"{"variables": {"name": {"__name__": "default"}, "watch": {"__watch__": "false"}}}"#,
+        r#"{"variables": {"name": "default", "watch": "false"}}"#,
     );
     repo.write(
         "rust/min/Cargo.toml",
-        "name = \"__name__\"\nwatch = __watch__\n",
+        "name = \"{{name}}\"\nwatch = {{watch}}\n",
     );
     repo.write("rust/min/src/main.rs", "fn main() {}\n");
     repo.write("rust/min/README.md", "included in the full copy\n");
@@ -302,7 +302,7 @@ fn init_runs_commands_in_order_from_destination_with_variable_values() {
     let repo = TempRepo::new("init-commands", &["rust"]);
     repo.write(
         "rust/min/schema.json",
-        r#"{"variables":{"name":{"__name__":"default"}},"commands":[["sh","-c","printf '%s' \"$1\" > repo-name","sh","__name__"],["sh","-c","test \"$(cat repo-name)\" = demo && printf second > second.txt"]]}"#,
+        r#"{"variables":{"name":"default"},"commands":[["sh","-c","printf '%s' \"$1\" > repo-name","sh","{{name}}"],["sh","-c","test \"$(cat repo-name)\" = demo && printf second > second.txt"]]}"#,
     );
     repo.write("rust/min/copied.txt", "copied\n");
     let destination = repo.path().join("demo");
@@ -330,6 +330,39 @@ fn init_runs_commands_in_order_from_destination_with_variable_values() {
     assert_eq!(
         std::fs::read_to_string(destination.join("copied.txt")).unwrap(),
         "copied\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_uses_custom_delimiters_for_files_and_command_arguments() {
+    let repo = TempRepo::new("init-custom-delimiters", &["rust"]);
+    repo.write(
+        "rust/min/schema.json",
+        r##"{"settings":{"delimiters":{"open":"#{","close":"}"}},"variables":{"name":"default"},"commands":[["sh","-c","printf '%s' \"$1\" > command-value","sh","#{ name }"]]}"##,
+    );
+    repo.write("rust/min/value.txt", "#{name}\n");
+    let destination = repo.path().join("demo");
+
+    let output = run(
+        repo.path(),
+        &[
+            "init",
+            "rust/min",
+            destination.to_str().expect("destination is UTF-8"),
+            "--name",
+            "my project",
+        ],
+    );
+
+    assert_eq!(exit_code(&output), 0, "{}", stderr_of(&output));
+    assert_eq!(
+        std::fs::read_to_string(destination.join("value.txt")).unwrap(),
+        "my project\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(destination.join("command-value")).unwrap(),
+        "my project"
     );
 }
 
@@ -365,9 +398,9 @@ fn init_selects_the_group_named_template_by_default() {
     let repo = TempRepo::new("init-default-template", &["just"]);
     repo.write(
         "just/just/schema.json",
-        r#"{"variables":{"name":{"__name__":"default"}}}"#,
+        r#"{"variables":{"name":"default"}}"#,
     );
-    repo.write("just/just/marker.txt", "default template: __name__\n");
+    repo.write("just/just/marker.txt", "default template: {{name}}\n");
     repo.write("just/publish/marker.txt", "publish template\n");
     let destination = repo.path().join("output");
 
@@ -404,7 +437,7 @@ fn schema_selects_the_only_template_by_default() {
 #[test]
 fn schema_accepts_a_trailing_slash_after_the_group() {
     let repo = TempRepo::new("schema-default-trailing-slash", &["just"]);
-    let contents = "{\"variables\":{\"name\":{\"__name__\":\"default\"}}}\n";
+    let contents = "{\"variables\":{\"name\":\"default\"}}\n";
     repo.write("just/just/schema.json", contents);
     repo.write("just/publish/schema.json", "{\"variables\":{}}\n");
 

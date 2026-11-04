@@ -334,7 +334,8 @@ fn run_init(argv: &[OsString]) -> Result<()> {
 }
 
 fn run_commands(schema: &Schema, options: &materialize::InitOptions) -> Result<()> {
-    let replacements = Replacements::bind(&schema.variables, &options.overrides);
+    let replacements =
+        Replacements::bind(&schema.variables, &options.overrides, &schema.delimiters);
     for command in &schema.commands {
         let Some((program, arguments)) = command.split_first() else {
             return Err(Error::Internal {

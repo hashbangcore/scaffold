@@ -11,8 +11,24 @@ pub const SCHEMA_FILE: &str = "schema.json";
 /// Native flag names a schema variable must not shadow.
 const RESERVED_NAMES: &[&str] = &["help"];
 
-/// Variables declared by a template: knob name → replacement token → default value.
-pub type Variables = BTreeMap<String, BTreeMap<String, String>>;
+/// Variables declared by a template: option name → default value.
+pub type Variables = BTreeMap<String, String>;
+
+/// Text surrounding a variable name in files and command arguments.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Delimiters {
+    pub open: String,
+    pub close: String,
+}
+
+impl Default for Delimiters {
+    fn default() -> Self {
+        Self {
+            open: "{{".to_owned(),
+            close: "}}".to_owned(),
+        }
+    }
+}
 
 /// Parsed and validated `schema.json`.
 #[derive(Debug)]
@@ -21,6 +37,8 @@ pub struct Schema {
     pub variables: Variables,
     /// File selection rules applied while planning the copy.
     pub(crate) files: FileSelection,
+    /// Delimiters used to identify variables in text.
+    pub delimiters: Delimiters,
     /// Argument lists executed in order after the scaffold is copied.
     pub commands: Vec<Vec<String>>,
 }
@@ -85,7 +103,7 @@ pub fn parse(raw: &str, template_label: &str) -> Result<Schema> {
     for key in object.keys() {
         if !matches!(
             key.as_str(),
-            "variables" | "include" | "exclude" | "commands"
+            "settings" | "variables" | "include" | "exclude" | "commands"
         ) {
             return Err(invalid(format!("unknown key '{key}'")));
         }
@@ -100,14 +118,63 @@ pub fn parse(raw: &str, template_label: &str) -> Result<Schema> {
             .map_or(&serde_json::Value::Null, |v| v),
         &invalid,
     )?;
+    let delimiters = parse_delimiters(object.get("settings"), &invalid)?;
     let commands = parse_commands(object.get("commands"), &invalid)?;
     let schema = Schema {
         variables,
         files: FileSelection { include, exclude },
+        delimiters,
         commands,
     };
     validate(&schema, template_label)?;
     Ok(schema)
+}
+
+fn parse_delimiters(
+    value: Option<&serde_json::Value>,
+    invalid: &(dyn Fn(String) -> Error + '_),
+) -> Result<Delimiters> {
+    let Some(value) = value else {
+        return Ok(Delimiters::default());
+    };
+    let settings = value
+        .as_object()
+        .ok_or_else(|| invalid("'settings' must be an object".to_owned()))?;
+    for key in settings.keys() {
+        if key != "delimiters" {
+            return Err(invalid(format!("unknown settings key '{key}'")));
+        }
+    }
+    let Some(value) = settings.get("delimiters") else {
+        return Ok(Delimiters::default());
+    };
+    let delimiters = value
+        .as_object()
+        .ok_or_else(|| invalid("'settings.delimiters' must be an object".to_owned()))?;
+    for key in delimiters.keys() {
+        if !matches!(key.as_str(), "open" | "close") {
+            return Err(invalid(format!("unknown delimiter key '{key}'")));
+        }
+    }
+    let parse_delimiter = |key: &str| -> Result<String> {
+        let Some(value) = delimiters.get(key) else {
+            return Err(invalid(format!("'settings.delimiters.{key}' is required")));
+        };
+        let Some(value) = value.as_str() else {
+            return Err(invalid(format!(
+                "'settings.delimiters.{key}' must be a string"
+            )));
+        };
+        if value.is_empty() {
+            return Err(invalid(format!(
+                "'settings.delimiters.{key}' must not be empty"
+            )));
+        }
+        Ok(value.to_owned())
+    };
+    let open = parse_delimiter("open")?;
+    let close = parse_delimiter("close")?;
+    Ok(Delimiters { open, close })
 }
 
 fn parse_commands(
@@ -262,31 +329,19 @@ fn parse_variables(
         serde_json::Value::Null => Ok(Variables::new()),
         serde_json::Value::Object(knobs) => {
             let mut variables = Variables::new();
-            for (name, tokens) in knobs {
-                let default_map = tokens.as_object().ok_or_else(|| {
-                    invalid(format!("variable '{name}' must map tokens to defaults"))
+            for (name, default) in knobs {
+                if name.is_empty() {
+                    return Err(invalid("variable name must not be empty".to_owned()));
+                }
+                let default = default.as_str().ok_or_else(|| {
+                    invalid(format!("default of variable '{name}' must be a string"))
                 })?;
-                if default_map.is_empty() {
-                    return Err(invalid(format!("variable '{name}' declares no tokens")));
-                }
-                let mut token_defaults = BTreeMap::new();
-                for (token, default) in default_map {
-                    if token.is_empty() {
-                        return Err(invalid(format!(
-                            "variable '{name}' declares an empty token"
-                        )));
-                    }
-                    let default = default.as_str().ok_or_else(|| {
-                        invalid(format!("default of token '{token}' must be a string"))
-                    })?;
-                    token_defaults.insert(token.clone(), default.to_owned());
-                }
-                variables.insert(name.clone(), token_defaults);
+                variables.insert(name.clone(), default.to_owned());
             }
             Ok(variables)
         }
         other => Err(invalid(format!(
-            "'variables' must map names to token maps, found {}",
+            "'variables' must map names to string defaults, found {}",
             describe(other.clone())
         ))),
     }
@@ -302,18 +357,6 @@ fn validate(schema: &Schema, template_label: &str) -> Result<()> {
             });
         }
     }
-    let mut seen: Vec<&str> = Vec::new();
-    for tokens in schema.variables.values() {
-        for token in tokens.keys() {
-            if seen.contains(&token.as_str()) {
-                return Err(Error::SchemaInvalid {
-                    template: template_label.to_owned(),
-                    reason: format!("token '{token}' is declared by several variables"),
-                });
-            }
-            seen.push(token);
-        }
-    }
     Ok(())
 }
 
@@ -322,15 +365,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_reads_variable_tokens_and_defaults() {
+    fn parse_reads_variable_defaults() {
         let schema = parse(
-            r#"{"variables":{"name":{"__name__":"demo"},"watch":{"__watch__":"true"}}}"#,
+            r#"{"variables":{"name":"demo","watch":"true"}}"#,
             "just/publish",
         )
         .expect("schema parses");
 
-        assert_eq!(schema.variables["name"]["__name__"], "demo");
-        assert_eq!(schema.variables["watch"]["__watch__"], "true");
+        assert_eq!(schema.variables["name"], "demo");
+        assert_eq!(schema.variables["watch"], "true");
+        assert_eq!(schema.delimiters, Delimiters::default());
+    }
+
+    #[test]
+    fn parse_accepts_optional_custom_delimiters() {
+        for raw in [r#"{"variables":{}}"#, r#"{"settings":{},"variables":{}}"#] {
+            assert_eq!(
+                parse(raw, "template").unwrap().delimiters,
+                Delimiters::default()
+            );
+        }
+        let schema = parse(
+            r##"{"settings":{"delimiters":{"open":"#{","close":"}"}},"variables":{}}"##,
+            "template",
+        )
+        .expect("custom delimiters parse");
+        assert_eq!(
+            schema.delimiters,
+            Delimiters {
+                open: "#{".to_owned(),
+                close: "}".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_rejects_invalid_custom_delimiters_and_variable_defaults() {
+        for raw in [
+            r##"{"settings":{"delimiters":{"open":"#{"}},"variables":{}}"##,
+            r#"{"settings":{"delimiters":{"open":"","close":"}"}},"variables":{}}"#,
+            r#"{"settings":{"delimiters":{"open":1,"close":"}"}},"variables":{}}"#,
+            r#"{"variables":{"name":{"token":"default"}}}"#,
+            r#"{"variables":{"name":false}}"#,
+        ] {
+            assert!(matches!(
+                parse(raw, "template"),
+                Err(Error::SchemaInvalid { .. })
+            ));
+        }
     }
 
     #[test]
@@ -340,7 +422,7 @@ mod tests {
             Err(Error::SchemaInvalid { .. })
         ));
         assert!(matches!(
-            parse(r#"{"variables":{"help":{"__help__":"x"}}}"#, "template"),
+            parse(r#"{"variables":{"help":"x"}}"#, "template"),
             Err(Error::ReservedVariable { variable, .. }) if variable == "help"
         ));
     }
@@ -378,16 +460,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_duplicate_tokens_and_non_string_defaults() {
+    fn parse_rejects_non_string_defaults() {
         assert!(matches!(
-            parse(
-                r#"{"variables":{"a":{"__same__":"x"},"b":{"__same__":"y"}}}"#,
-                "template"
-            ),
-            Err(Error::SchemaInvalid { .. })
-        ));
-        assert!(matches!(
-            parse(r#"{"variables":{"a":{"__a__":false}}}"#, "template"),
+            parse(r#"{"variables":{"a":false}}"#, "template"),
             Err(Error::SchemaInvalid { .. })
         ));
     }

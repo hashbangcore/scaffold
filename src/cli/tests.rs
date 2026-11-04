@@ -21,7 +21,7 @@ fn init_accepts_selection_destination_and_schema_variables() {
         .expect("declared variable flags parse");
     let (_, init) = matches.subcommand().expect("init matched");
     let schema = crate::schema::parse(
-        r#"{"variables":{"name":{"__name__":"default"},"watch":{"__watch__":"true"}}}"#,
+        r#"{"variables":{"name":"default","watch":"true"}}"#,
         "just/publish",
     )
     .expect("schema parses");

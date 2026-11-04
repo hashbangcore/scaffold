@@ -207,7 +207,7 @@ pub fn run(selected: &Selected, schema: Option<&Schema>, options: &InitOptions) 
     let items = plan_with_selection(&selected.dir, schema.map(|schema| &schema.files))?;
     precheck(&items, options)?;
     let replacements = schema.map_or_else(Replacements::default, |schema| {
-        Replacements::bind(&schema.variables, &options.overrides)
+        Replacements::bind(&schema.variables, &options.overrides, &schema.delimiters)
     });
     write(&items, options, &replacements)
 }
@@ -240,10 +240,10 @@ mod tests {
         fs::create_dir_all(source.join("nested")).unwrap();
         fs::write(
             source.join("schema.json"),
-            r#"{"variables":{"name":{"__name__":"default"}}}"#,
+            r#"{"variables":{"name":"default"}}"#,
         )
         .unwrap();
-        fs::write(source.join("nested/file.txt"), "__name__").unwrap();
+        fs::write(source.join("nested/file.txt"), "{{name}}").unwrap();
         fs::create_dir(source.join("empty")).unwrap();
         fs::write(source.join("other.txt"), "all content").unwrap();
         let destination = root.join("new-project");
