@@ -1,6 +1,6 @@
 # Scaffold
 
-This tool allows you to manage templates from the command line.
+This tool allows you to manage templates from the command line. It is simple, versatile, and fast.
 
 [README in Spanish](./README.es.md)
 
@@ -10,9 +10,9 @@ This tool allows you to manage templates from the command line.
 cargo install scaffold-cli
 ```
 
-## Environment Variable
+## Environment variable
 
-The program uses only `SCAFFOLDS`, an environment variable that defines the path where templates are stored.
+The program uses only `SCAFFOLDS` as an environment variable, which defines the path where templates are stored.
 
 ```sh
 export SCAFFOLDS="$HOME/scaffolds"
@@ -20,28 +20,28 @@ export SCAFFOLDS="$HOME/scaffolds"
 
 ## Commands
 
-- `init`: deploys a template. If no destination is specified, the current directory is used.
+- `init`: deploys a template. If no destination is specified, the directory where the command is executed is used.
 
 ```sh
 scaffold init template [destination]
 ```
 
-- `list`: lists available templates.
+- `list`: lists the available templates.
 
 ```sh
 scaffold list [group/template]
 ```
 
-- `schema`: prints the content of `schema.json`, if available.
+- `schema`: prints the contents of `schema.json`, if available.
 
 ```sh
 scaffold schema group/template
 ```
 
-- `completion`: generates the completion script for the selected shell.
+- `completion`: generates the autocompletion script for the selected shell.
 
 ```sh
-scaffold completion [bash]
+scaffold completion [shell]
 ```
 
 - `help`: displays the help message.
@@ -56,9 +56,9 @@ scaffold help
 scaffold version
 ```
 
-## Organization System
+## Organization system
 
-For the program to work correctly, templates must be organized in directories.
+For the program to work correctly, templates must be organized into directories.
 
 The parent directory (group) can contain one or more subdirectories (templates), each with the elements you want to use.
 
@@ -86,12 +86,12 @@ just/
     └── justfile
 ```
 
-## Default Template
+## Default template
 
-The program determines the default template using two rules:
+The program determines the default template according to two rules:
 
-1. When it's the only template available within a group.
-2. When its name matches the group name.
+1. When it is the only template available within a group.
+2. When the template name matches the group name.
 
 ```text
 .
@@ -123,9 +123,9 @@ scaffold init ansible/ansible .
 
 ## Schema
 
-Optionally, you can use `schema.json` to configure your template deployments.
+Optionally, you can use `schema.json` to configure the deployment of your templates.
 
-Available options are `include`, `exclude`, and `variables`.
+The available options are `include`, `exclude`, `variables`, `commands`, and `delimiters`.
 
 ```text
 just/
@@ -139,11 +139,13 @@ just/
     └── schema.json
 ```
 
-The `include` and `exclude` options allow you to use glob patterns to select files and directories.
+> The `include` and `exclude` options allow you to use glob patterns to select files and directories.
 
-### Include
+### Including files and directories
 
-With `include` you can manually select the elements that the template should deploy.
+With `include`, you can manually select the elements that the template should deploy.
+
+**`schema.json`**
 
 ```json
 {
@@ -165,58 +167,51 @@ With `include` you can manually select the elements that the template should dep
         └── __init__.py
 ```
 
-### Exclude
+### Excluding files and directories
 
-With `exclude` you can manually select the elements you want to exclude.
+With `exclude`, you can manually select the elements you want to exclude.
+
+**`schema.json`**
 
 ```json
 {
   "exclude": [
-    ".git"
+    ".git",
+    "README.md"
   ]
 }
 ```
 
+> This option is useful if you want to version your templates and include their own documentation.
+
 ### Variables
 
-In `schema.json` you can define your own variables and their values will be injected into all files where the corresponding words are detected.
+In `schema.json`, you can define your own variables, and their values will be injected into all files where the corresponding variables are detected.
 
-Variables are exposed as command-line flags when running `scaffold init`.
+Variables are exposed through command-line flags when running `scaffold init`.
 
-For example, you can define the `port` variable. The program will look for `PORT` in the files and perform the corresponding replacement.
+For example, you can define the `port` variable. The program will search for `{{port}}` in all files and perform the corresponding substitution.
 
 ```json
 {
   "variables": {
-    "port": {
-      "PORT": "8080"
-    }
+    "port": "8080"
   }
 }
 ```
-
-The `port` variable becomes the `--port` flag, while `PORT` is the word that will be replaced in each file.
 
 ```sh
 scaffold init [template] --port 9000
 ```
 
-You can use as many variables as you want and freely define the syntax of the words to be replaced.
-
-You can use braces `{}`, underscores `_`, characters like `$` or any other format you prefer.
+A more complex use case could be the following:
 
 ```json
 {
   "variables": {
-    "name": {
-      "{name}": "Project name"
-    },
-    "description": {
-      "$description": "Hello world"
-    },
-    "port": {
-      "_port": "8080"
-    }
+    "name": "Project name",
+    "description": "Hello world",
+    "port": 8080
   }
 }
 ```
@@ -228,6 +223,85 @@ scaffold init web/laravel ./new-dashboard \
   --port 9000
 ```
 
+### Commands
+
+There may be cases where initialization tasks need to be executed when deploying a template; for this purpose, the `commands` option is available.
+
+**`schema.json`**
+
+```json
+{
+  "commands": [
+    ["git", "init", "--initial-branch=dev"],
+    ["npm", "install"],
+    ["direnv", "allow"]
+  ]
+}
+```
+
+Variables defined previously can be used in commands as follows:
+
+**`schema.json`**
+
+```json
+{
+  "variables": {
+    "branch": "dev"
+  },
+  "commands": [
+    ["git", "init", "--initial-branch={{branch}}"]
+  ]
+}
+```
+
+The template creates the `dev` branch by default, but you can modify the `branch` variable from the command line.
+
+```sh
+scaffold init [template] [directory] --branch main
+```
+
+### Custom delimiters
+
+By default, the delimiters are double braces `{{ variable }}`, but you can change them by adding `settings.delimiters`.
+
+**`schema.json`**
+
+```json
+{
+  "settings": {
+    "delimiters": {
+      "open": "#{",
+      "close": "}"
+    }
+  }
+}
+```
+
+In this scenario, you would need to use `#{variable}` in your files.
+
+**`Cargo.toml`**
+
+```toml
+[package]
+name = "#{name}"
+description = "#{name}"
+
+[[bin]]
+name = "#{bin}"
+path = "src/main.rs"
+```
+
+**`src/main.rs`**
+
+```rust
+fn main() {
+    println!("#{name}");
+}
+```
+
+> Personally, I don't like software that limits the user, but using fixed delimiters simplifies `schema.json` compared to the previous version. To deal with this contradiction, I decided to include the option to define custom delimiters. `settings` is reserved for possible customizations in the future.
+
 ## License
 
 BSD 2-Clause. See [LICENSE](./LICENSE).
+
