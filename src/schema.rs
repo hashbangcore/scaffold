@@ -21,6 +21,8 @@ pub struct Schema {
     pub variables: Variables,
     /// File selection rules applied while planning the copy.
     pub(crate) files: FileSelection,
+    /// Argument lists executed in order after the scaffold is copied.
+    pub commands: Vec<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -81,7 +83,10 @@ pub fn parse(raw: &str, template_label: &str) -> Result<Schema> {
         }
     };
     for key in object.keys() {
-        if !matches!(key.as_str(), "variables" | "include" | "exclude") {
+        if !matches!(
+            key.as_str(),
+            "variables" | "include" | "exclude" | "commands"
+        ) {
             return Err(invalid(format!("unknown key '{key}'")));
         }
     }
@@ -95,12 +100,59 @@ pub fn parse(raw: &str, template_label: &str) -> Result<Schema> {
             .map_or(&serde_json::Value::Null, |v| v),
         &invalid,
     )?;
+    let commands = parse_commands(object.get("commands"), &invalid)?;
     let schema = Schema {
         variables,
         files: FileSelection { include, exclude },
+        commands,
     };
     validate(&schema, template_label)?;
     Ok(schema)
+}
+
+fn parse_commands(
+    value: Option<&serde_json::Value>,
+    invalid: &(dyn Fn(String) -> Error + '_),
+) -> Result<Vec<Vec<String>>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let commands = value
+        .as_array()
+        .ok_or_else(|| invalid("'commands' must be an array of argument arrays".to_owned()))?;
+    commands
+        .iter()
+        .enumerate()
+        .map(|(command_index, command)| {
+            let arguments = command.as_array().ok_or_else(|| {
+                invalid(format!(
+                    "'commands[{command_index}]' must be an argument array"
+                ))
+            })?;
+            if arguments.is_empty() {
+                return Err(invalid(format!(
+                    "'commands[{command_index}]' must include a program"
+                )));
+            }
+            arguments
+                .iter()
+                .enumerate()
+                .map(|(argument_index, argument)| {
+                    let argument = argument.as_str().ok_or_else(|| {
+                        invalid(format!(
+                            "'commands[{command_index}][{argument_index}]' must be a string"
+                        ))
+                    })?;
+                    if argument_index == 0 && argument.is_empty() {
+                        return Err(invalid(format!(
+                            "'commands[{command_index}]' must include a program"
+                        )));
+                    }
+                    Ok(argument.to_owned())
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn parse_path_patterns(
@@ -291,6 +343,38 @@ mod tests {
             parse(r#"{"variables":{"help":{"__help__":"x"}}}"#, "template"),
             Err(Error::ReservedVariable { variable, .. }) if variable == "help"
         ));
+    }
+
+    #[test]
+    fn parse_accepts_multiple_command_argument_lists() {
+        let schema = parse(
+            r#"{"commands":[["git","init"],["gh","repo","create"]]}"#,
+            "template",
+        )
+        .expect("schema parses");
+
+        assert_eq!(
+            schema.commands,
+            vec![
+                vec!["git".to_owned(), "init".to_owned()],
+                vec!["gh".to_owned(), "repo".to_owned(), "create".to_owned()],
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_rejects_commands_without_a_program_or_string_arguments() {
+        for raw in [
+            r#"{"commands":[[]]}"#,
+            r#"{"commands":[[""]]}"#,
+            r#"{"commands":[["git",1]]}"#,
+            r#"{"commands":"git init"}"#,
+        ] {
+            assert!(matches!(
+                parse(raw, "template"),
+                Err(Error::SchemaInvalid { .. })
+            ));
+        }
     }
 
     #[test]

@@ -50,6 +50,8 @@ pub enum Error {
     },
     /// A code path that clap should have prevented was reached.
     Internal { reason: String },
+    /// A command declared by a scaffold could not run successfully.
+    CommandFailed { program: String, reason: String },
 }
 
 impl Error {
@@ -130,6 +132,9 @@ impl fmt::Display for Error {
                 }
             }
             Self::Internal { reason } => write!(f, "internal error: {reason}"),
+            Self::CommandFailed { program, reason } => {
+                write!(f, "command '{program}' failed: {reason}")
+            }
         }
     }
 }

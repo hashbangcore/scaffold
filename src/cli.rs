@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use clap::error::ErrorKind;
 use clap::{Arg, ArgMatches, Command};
@@ -13,6 +14,7 @@ use clap_complete::env::Shells;
 use crate::discovery;
 use crate::error::{Error, Result};
 use crate::materialize;
+use crate::replace::{Replacements, substitute};
 use crate::schema::{self, Schema};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -324,7 +326,43 @@ fn run_init(argv: &[OsString]) -> Result<()> {
     reject_unknown_flags(&argv[3..], &variables, &selected)?;
     let matches = parse_init(&variables, argv.to_vec())?;
     let options = init_options(&matches, schema.as_ref());
-    materialize::run(&selected, schema.as_ref(), &options)
+    materialize::run(&selected, schema.as_ref(), &options)?;
+    if let Some(schema) = schema.as_ref() {
+        run_commands(schema, &options)?;
+    }
+    Ok(())
+}
+
+fn run_commands(schema: &Schema, options: &materialize::InitOptions) -> Result<()> {
+    let replacements = Replacements::bind(&schema.variables, &options.overrides);
+    for command in &schema.commands {
+        let Some((program, arguments)) = command.split_first() else {
+            return Err(Error::Internal {
+                reason: "schema contains an empty command".to_owned(),
+            });
+        };
+        let program = substitute(program, &replacements);
+        let arguments: Vec<String> = arguments
+            .iter()
+            .map(|argument| substitute(argument, &replacements))
+            .collect();
+        let status = ProcessCommand::new(&program)
+            .args(arguments)
+            .current_dir(&options.destination)
+            .status()
+            .map_err(|source| Error::CommandFailed {
+                program: program.clone(),
+                reason: source.to_string(),
+            })?;
+        if !status.success() {
+            let reason = status.code().map_or_else(
+                || "terminated by signal".to_owned(),
+                |code| format!("exit code {code}"),
+            );
+            return Err(Error::CommandFailed { program, reason });
+        }
+    }
+    Ok(())
 }
 
 /// Run the static init parser only for its usage and help output.
