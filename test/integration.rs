@@ -296,6 +296,70 @@ fn init_without_destination_copies_into_the_current_directory() {
     assert!(!cwd.path().join("schema.json").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn init_runs_commands_in_order_from_destination_with_variable_values() {
+    let repo = TempRepo::new("init-commands", &["rust"]);
+    repo.write(
+        "rust/min/schema.json",
+        r#"{"variables":{"name":{"__name__":"default"}},"commands":[["sh","-c","printf '%s' \"$1\" > repo-name","sh","__name__"],["sh","-c","test \"$(cat repo-name)\" = demo && printf second > second.txt"]]}"#,
+    );
+    repo.write("rust/min/copied.txt", "copied\n");
+    let destination = repo.path().join("demo");
+
+    let output = run(
+        repo.path(),
+        &[
+            "init",
+            "rust/min",
+            destination.to_str().expect("destination is UTF-8"),
+            "--name",
+            "demo",
+        ],
+    );
+
+    assert_eq!(exit_code(&output), 0, "{}", stderr_of(&output));
+    assert_eq!(
+        std::fs::read_to_string(destination.join("repo-name")).unwrap(),
+        "demo"
+    );
+    assert_eq!(
+        std::fs::read_to_string(destination.join("second.txt")).unwrap(),
+        "second"
+    );
+    assert_eq!(
+        std::fs::read_to_string(destination.join("copied.txt")).unwrap(),
+        "copied\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_keeps_destination_and_stops_after_a_failed_command() {
+    let repo = TempRepo::new("init-command-failure", &["rust"]);
+    repo.write(
+        "rust/min/schema.json",
+        r#"{"commands":[["sh","-c","printf before > marker.txt"],["sh","-c","exit 7"],["sh","-c","printf after > later.txt"]]}"#,
+    );
+    repo.write("rust/min/copied.txt", "copied\n");
+    let destination = repo.path().join("demo");
+
+    let output = run(
+        repo.path(),
+        &[
+            "init",
+            "rust/min",
+            destination.to_str().expect("destination is UTF-8"),
+        ],
+    );
+
+    assert_ne!(exit_code(&output), 0);
+    assert!(stderr_of(&output).contains("command 'sh' failed: exit code 7"));
+    assert!(destination.join("copied.txt").is_file());
+    assert!(destination.join("marker.txt").is_file());
+    assert!(!destination.join("later.txt").exists());
+}
+
 #[test]
 fn init_selects_the_group_named_template_by_default() {
     let repo = TempRepo::new("init-default-template", &["just"]);
