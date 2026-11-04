@@ -7,7 +7,7 @@ This tool allows you to manage templates from the command line.
 ## Installation
 
 ```sh
-cargo install scaffold
+cargo install scaffold-cli
 ```
 
 ## Environment Variable

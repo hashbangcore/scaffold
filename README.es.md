@@ -7,7 +7,7 @@ Esta herramienta permite gestionar plantillas desde la línea de comandos.
 ## Instalación
 
 ```sh
-cargo install scaffold
+cargo install scaffold-cli
 ```
 
 ## Variable de entorno
