@@ -1,0 +1,6 @@
+html:
+    pandoc ../README.md --lua-filter=html/links.lua -o html/readme.html
+    pandoc ../README.es.md --lua-filter=html/links.lua -o html/readme.es.html
+    gomplate --config gomplate.yaml
+    rm -rf  html/readme.html html/readme.es.html
+    prettier -w html

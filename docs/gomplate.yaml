@@ -1,0 +1,24 @@
+leftDelim: '[[-'
+rightDelim: '-]]'
+
+context:
+  data:
+    url: data.yaml
+
+inputFiles:
+  - html/layout.html
+  - html/layout.es.html
+  - html/license.html
+
+outputFiles:
+  - html/public/index.html
+  - html/public/es/index.html
+  - html/public/license/index.html
+
+templates:
+  english:
+    url: html/readme.html
+  spanish:
+    url: html/readme.es.html
+  license:
+    url: ../LICENSE
