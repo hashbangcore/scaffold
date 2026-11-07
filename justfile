@@ -1,4 +1,5 @@
 mod dist
+mod docs
 
 set unstable := true
 
