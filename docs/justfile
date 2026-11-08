@@ -1,6 +1,16 @@
-html:
-    pandoc ../README.md --lua-filter=html/links.lua -o html/readme.html
-    pandoc ../README.es.md --lua-filter=html/links.lua -o html/readme.es.html
-    gomplate --config gomplate.yaml
-    rm -rf  html/readme.html html/readme.es.html
-    prettier -w html
+TITLE := `basename "$(git rev-parse --show-toplevel)"`
+
+build:
+    just compose en ../README.md index.html
+    just compose es ../README.es.md es/index.html
+    just compose en ../LICENSE license/index.html
+    just minify
+
+compose lang content output:
+    env CONTENT="$(pandoc {{ content }} -t html --lua-filter=html/links.lua --quiet)" \
+    TITLE={{ TITLE }} \
+    LANG={{ lang }} \
+    gomplate -f html/layout.html -o html/public/{{ output }}
+
+minify:
+    minify -r -i html/public

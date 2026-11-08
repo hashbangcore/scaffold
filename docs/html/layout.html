@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ env.Getenv "LANG" }}">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="./blades.css" />
-    <title>[[- .data.title -]]</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@anyblades/blades@3.0.0/css/blades.min.css"/>
+    <title>{{ env.Getenv "TITLE" }}</title>
   </head>
   <body>
-    <main class="container">[[- template "english" -]]</main>
+    <main class="container">{{ env.Getenv "CONTENT" }}</main>
   </body>
 </html>
